@@ -20,7 +20,7 @@ onp.set_printoptions(precision=10)
 
 # Manage arguments
 parser = argparse.ArgumentParser()
-parser.add_argument('--tbd', type=float, default=0.)
+parser.add_argument('--num_orientations', type=int, default=20)
 args = parser.parse_args()
 
 # Latex style plot

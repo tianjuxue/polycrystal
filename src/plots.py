@@ -8,6 +8,7 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from src.arguments import args
+from src.utils import unpack_state
 
 
 def kp_loop(kp_pairs):
@@ -24,7 +25,7 @@ def kp_loop(kp_pairs):
     return loop[:-1]
 
 
-def poly_plot(polygon_mesh, variable, loc=0, **kwargs):
+def poly_plot(polygon_mesh, variable, **kwargs):
     """Plot the mesh.
     This function plots the polygon mesh.
     In 2D, this creates a class:`matplotlib.collections.PolyCollection`
@@ -66,6 +67,7 @@ def poly_plot(polygon_mesh, variable, loc=0, **kwargs):
                   polygon_mesh.regions]
         # create poly input
         xy = [np.array([polygon_mesh.points[kp] for kp in lp]) for lp in vloops]
+
         pc = collections.PolyCollection(xy, **kwargs)
         image = ax.add_collection(pc)
         ax.autoscale_view()
@@ -82,7 +84,7 @@ def poly_plot(polygon_mesh, variable, loc=0, **kwargs):
     if variable == 'temp':
         # colors = 100 * np.random.rand(len(polygon_mesh.regions))
         pc.set_array(polygon_mesh.temp)
-        plt.colorbar(pc, fraction=0.2, ax=ax)
+        plt.colorbar(pc, shrink=0.5, ax=ax)
         image.set_clim(vmin=273, vmax=1000)
 
     # Adjust Axes
@@ -182,9 +184,8 @@ def plot_facets(polygon_mesh, hide_interior=True, **kwargs):
         ax.set_zlim(zlim)
 
 
-def plot_polygon_mesh(polygon_mesh, variable):
-    phase_colors = ["#" + "%06x" % random.randint(0, 0xFFFFFF) for _ in range(polygon_mesh.num_phases)]
-    region_colors = [phase_colors[phase_number] for phase_number in polygon_mesh.phase_numbers]
+def plot_polygon_mesh(orientation_colors, polygon_mesh, variable):
+    region_colors = [orientation_colors[o] for o in polygon_mesh.orientations]
 
     if variable == 'phase':
         poly_plot(polygon_mesh, variable, facecolor=region_colors, edgecolor='k')
@@ -198,24 +199,42 @@ def plot_polygon_mesh(polygon_mesh, variable):
     # exit()
 
 
+def get_orientations(zeta, eta):
+    orientations = np.argmax(eta, axis=1)
+    orientations = np.where(zeta.reshape(-1) < 0.1, args.num_orientations, orientations)
+    return orientations
+
+
 def save_animation(ys, polygon_mesh):
+    orientation_colors = [f"#{random.randint(0, 0xFFFFFF):06x}" for _ in range(polygon_mesh.num_orientations)]
+    orientation_colors.append('#000000')
+
+    Ts, zetas, etas = unpack_state(ys)
+
     tmp_root_path = f'data/png/tmp/'
     shutil.rmtree(tmp_root_path, ignore_errors=True)
     os.mkdir(tmp_root_path)
 
     max_temp = []
 
-    for i in range(len(ys)):
+    for i in range(len(Ts)):
         if i % 20 == 0:
             print(f"i = {i}")
         fig = plt.figure(figsize=(20, 6))
-        y = ys[i]
-        polygon_mesh.temp = y
-        plot_polygon_mesh(polygon_mesh, variable='temp')
+        T = Ts[i]
+        zeta = zetas[i]
+        eta = etas[i]
+
+        polygon_mesh.temp = T.reshape(-1)
+        polygon_mesh.orientations = get_orientations(zeta, eta)
+
+        plot_polygon_mesh(orientation_colors, polygon_mesh, variable='temp')
+        # plot_polygon_mesh(orientation_colors, polygon_mesh, variable='phase')
+
         fig.savefig(tmp_root_path + f'{i:05}.png', bbox_inches='tight')
         plt.close(fig)
 
-        max_temp.append(np.max(y))
+        max_temp.append(np.max(T))
 
     fig = plt.figure()
     plt.plot(max_temp, marker='o', markersize=2, linestyle="-", linewidth=1, color='black')

@@ -9,6 +9,7 @@ from matplotlib import pyplot as plt
 import microstructpy as msp
 from src.arguments import args
 from src.plots import poly_plot, plot_polygon_mesh, save_animation
+from src.utils import unpack_state
 
 
 def compute_centroids(polygon_mesh):
@@ -58,14 +59,13 @@ def generate_microsctructure():
 
     polygon_mesh = msp.meshing.PolyMesh.from_seeds(seeds, domain)
     # Add a few features that we need
-    polygon_mesh.num_phases = 20
-    polygon_mesh.phase_numbers = onp.random.randint(polygon_mesh.num_phases, size=len(polygon_mesh.regions))
+    polygon_mesh.num_orientations = 20
+    polygon_mesh.orientations = onp.random.randint(polygon_mesh.num_orientations, size=len(polygon_mesh.regions))
     polygon_mesh.centroids = compute_centroids(polygon_mesh)
 
     # plot_polygon_mesh(polygon_mesh, variable='phase')
 
     return polygon_mesh
-
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -106,7 +106,7 @@ def odeint(polygon_mesh, stepper, f, y0, ts, *diff_args):
 
 def build_graph(polygon_mesh):
     num_grains = len(polygon_mesh.regions)
-    num_phases = polygon_mesh.num_phases
+    num_orientations = polygon_mesh.num_orientations
     senders = []
     receivers = []
 
@@ -121,60 +121,76 @@ def build_graph(polygon_mesh):
     print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
 
     solid_phases = np.ones(num_grains)
-    grain_phases = np.zeros((num_grains, num_phases))
-    inds = jax.ops.index[np.arange(num_grains), polygon_mesh.phase_numbers]
-    grain_phases = jax.ops.index_update(grain_phases, inds, 1)
+    grain_orientations = np.zeros((num_grains, num_orientations))
+    inds = jax.ops.index[np.arange(num_grains), polygon_mesh.orientations]
+    grain_orientations = jax.ops.index_update(grain_orientations, inds, 1)
     temp = 300.*np.ones(num_grains)
-
     senders = np.array(senders)
     receivers = np.array(receivers)
 
-    node_features = {'temp': temp, 'solid_phases': solid_phases, 'grain_phases': grain_phases, 'centroids': polygon_mesh.centroids}
+    state = np.hstack((temp[:, None], solid_phases[:, None], grain_orientations))
+
+    node_features = {'state':state, 'centroids': polygon_mesh.centroids}
     global_features = {'t': 0.}
     graph = jraph.GraphsTuple(nodes=node_features, edges={}, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals=global_features)
 
-    return graph, temp
+    return graph, state
 
 
 def update_graph():
 
     def update_edge_fn(edges, senders, receivers, globals_):
         del edges, globals_
-        sender_temp = senders['temp']
-        receiver_temp = receivers['temp']   
-        coeff = 1e-2
-        edge_energy = coeff * np.sum((sender_temp - receiver_temp)**2)
-        return {'edge_energy': edge_energy}
+        sender_T, sender_zeta, sender_eta = unpack_state(senders['state'])
+        receiver_T, receiver_zeta, receiver_eta = unpack_state(receivers['state'])
+
+        coeff_T = 1e-2
+        grad_energy_T = coeff_T * np.sum((sender_T - receiver_T)**2)
+        coeff_zeta = 1e-3
+        grad_energy_zeta = coeff_zeta * np.sum((sender_zeta - receiver_zeta)**2)
+        coeff_eta = 1e-3
+        grad_energy_eta = coeff_eta * np.sum((sender_eta - receiver_eta)**2)
+        grad_energy = grad_energy_T + grad_energy_zeta + grad_energy_eta
+
+        return {'grad_energy': grad_energy}
 
     def update_node_fn(nodes, sent_edges, received_edges, globals_):
         del sent_edges, received_edges
 
         t = globals_['t'][0]
-        ambient_temp = 300.
-        temp = nodes['temp']
+        T, zeta, eta = unpack_state(nodes['state'])
         centroids = nodes['centroids']
-        coeff_ambient = 1.
-        q_ambient = coeff_ambient*(ambient_temp - temp)
-        coeff_laser = 1e5
-        length_scale = 0.2
 
+        T_melt = 800.
+        T_ambient = 300.        
+        coeff_ambient = 5.
+        q_ambient = coeff_ambient*(T_ambient - T).reshape(-1)
+        coeff_laser = 2*1e5
+        length_scale = 0.15
         # laser_pos = np.array([0., 0.])
         # laser_gate = np.where(t < 0.02, 1., 0.)
-
-
         laser_pos = np.array([t/0.1*4 - 2., 0.])
-        laser_gate = 1. 
-
+        laser_gate = np.where(t < 0.1, 1., 0.)
         q_laser = laser_gate * coeff_laser * np.exp(-np.sum((centroids - laser_pos[None, :])**2, axis=1) / (2 * length_scale**2))
-      
         q = q_ambient + q_laser
-        return {'heat_source': q}
+
+        m_phase = 1e1
+        phi = 0.5 * (1 - np.tanh(1e1*(T/T_melt - 1)))
+        phase_energy = m_phase * np.sum(((1 - zeta)**2 * phi +  zeta**2 * (1 - phi)))
+        m_grain = 1e1
+        gamma = 1.
+        vmap_outer = jax.vmap(np.outer, in_axes=(0, 0))
+        grain_energy = m_grain * (np.sum(eta**4/4. - eta**2/2.) + gamma*(np.sum(vmap_outer(eta, eta)**2) - np.sum(eta**4)) + 
+                       np.sum((1 - zeta.reshape(-1))**2 * np.sum(eta**2, axis=1)))
+        local_energy = phase_energy + grain_energy
+
+        return {'heat_source': q, 'local_energy': local_energy}
 
     def update_global_fn(nodes, edges, globals_):
         del globals_
-        total_edge_energy = edges['edge_energy']
-        return {'total_energy': total_edge_energy}
+        total_energy = edges['grad_energy'] + nodes['local_energy']
+        return {'total_energy': total_energy}
 
     net_fn = jraph.GraphNetwork(update_edge_fn=update_edge_fn,
                                 update_node_fn=update_node_fn,
@@ -188,25 +204,16 @@ def phase_field(graph):
 
     def compute_energy(y, t):
         graph.globals['t'] = t
-        graph.nodes['temp'] = y
+        graph.nodes['state'] = y
         new_graph = net_fn(graph)
         return new_graph.globals['total_energy'][0], new_graph.nodes['heat_source']
 
-    grad_laplace = jax.grad(lambda y, t: compute_energy(y, t)[0])
+    grad_grad = jax.grad(lambda y, t: compute_energy(y, t)[0])
 
     def state_rhs(y, t, *diff_args):
-
         _, source = compute_energy(y, t)
-        grads = grad_laplace(y, t)
-
-        # print(grads.shape)
-        # print(source.shape)
-
-        # exit()
-
-        assert grads.shape == source.shape
-
-        rhs = -grads + source
+        grads = grad_grad(y, t)
+        rhs = np.hstack(((source - grads[:, 0])[:, None], -grads[:, 1:]))
         return rhs
 
     return state_rhs
@@ -223,7 +230,7 @@ def simulate(ts):
 
 def exp():
     dt = 1e-4
-    ts = np.arange(0., dt*1001, dt)
+    ts = np.arange(0., dt*2001, dt)
     ys, polygon_mesh = simulate(ts)
     save_animation(ys[::20], polygon_mesh)
 
