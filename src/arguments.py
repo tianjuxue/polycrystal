@@ -20,14 +20,20 @@ onp.set_printoptions(precision=10)
 
 # Manage arguments
 parser = argparse.ArgumentParser()
-parser.add_argument('--num_orientations', type=int, default=20)
+parser.add_argument('--num_oris', type=int, default=20)
+parser.add_argument('--num_grains', type=int, default=20000)
+parser.add_argument('--dim', type=int, default=3)
+parser.add_argument('--domain_height', type=float, default=0.1)
+parser.add_argument('--domain_width', type=float, default=0.2)
+parser.add_argument('--domain_length', type=float, default=1.)
+parser.add_argument('--T_melt', type=float, default=1500.)
 args = parser.parse_args()
 
 # Latex style plot
-plt.rcParams.update({
-    "text.latex.preamble": r"\usepackage{amsmath}",
-    "text.usetex": True,
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica"]})
+# plt.rcParams.update({
+#     "text.latex.preamble": r"\usepackage{amsmath}",
+#     "text.usetex": True,
+#     "font.family": "sans-serif",
+#     "font.sans-serif": ["Helvetica"]})
 
 

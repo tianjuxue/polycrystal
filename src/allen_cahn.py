@@ -5,67 +5,13 @@ import numpy as onp
 import os
 import pickle
 from functools import partial
+from scipy.spatial.transform import Rotation as R
+from collections import namedtuple
 from matplotlib import pyplot as plt
 import microstructpy as msp
 from src.arguments import args
-from src.plots import poly_plot, plot_polygon_mesh, save_animation
+from src.plots import poly_plot, save_animation
 from src.utils import unpack_state
-
-
-def compute_centroids(polygon_mesh):
-    '''
-    Find the centroids of grains
-    The package MicroStructPy does not provide this function, so we write it by ourselves.
-    Code is adapted from
-    https://github.com/kip-hart/MicroStructPy/blob/master/src/microstructpy/meshing/polymesh.py#L154
-    '''
-    centroids = []
-    n = len(polygon_mesh.points[0])
-    for i, region in enumerate(polygon_mesh.regions):
-        cen = onp.array(polygon_mesh.points)[polygon_mesh.facets[region[0]][0]]
-        centroid = onp.zeros(n)
-        vol = 0.
-        for f_num in region:
-            facet = onp.array(polygon_mesh.facets[f_num])
-            j_max = len(facet) - n + 2
-            for j in range(1, j_max):
-                inds = onp.append(onp.arange(j, j + n - 1), 0)
-                simplex = facet[inds]
-                facet_pts = onp.array(polygon_mesh.points)[simplex]
-                rel_pos = facet_pts - cen
-                vertices = onp.vstack((facet_pts, cen[None, :]))
-                sub_vol = onp.abs(onp.linalg.det(rel_pos))
-                centroid += onp.mean(vertices, axis=0)*sub_vol
-                vol += sub_vol
-        centroids.append(centroid/vol)
- 
-    return onp.array(centroids)
-
-
-def generate_microsctructure():
-    phase = {'shape': 'circle', 'size': 0.1}
-    domain = msp.geometry.Rectangle(length=5., width=1.)
-
-    pickle_path = f'data/pickle/seeds.pkl'
-    cache = os.path.isfile(pickle_path)
-    if cache:
-        with open(pickle_path, 'rb') as handle:
-            seeds = pickle.load(handle)
-    else:
-        seeds = msp.seeding.SeedList.from_info(phase, domain.area)
-        seeds.position(domain)
-        with open(pickle_path, 'wb') as handle:
-            pickle.dump(seeds, handle, protocol=pickle.HIGHEST_PROTOCOL)   
-
-    polygon_mesh = msp.meshing.PolyMesh.from_seeds(seeds, domain)
-    # Add a few features that we need
-    polygon_mesh.num_orientations = 20
-    polygon_mesh.orientations = onp.random.randint(polygon_mesh.num_orientations, size=len(polygon_mesh.regions))
-    polygon_mesh.centroids = compute_centroids(polygon_mesh)
-
-    # plot_polygon_mesh(polygon_mesh, variable='phase')
-
-    return polygon_mesh
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -88,14 +34,16 @@ def explicit_euler(state, t_crt, f, *diff_args):
     return (y_crt, t_crt), y_crt
 
 
-def odeint(polygon_mesh, stepper, f, y0, ts, *diff_args):
+def odeint(stepper, f, y0, ts, *diff_args):
     ys = []
     state = (y0, ts[0])
     for (i, t_crt) in enumerate(ts[1:]):
-
-        state, y =  stepper(state, t_crt, f, *diff_args)
+        state, y = stepper(state, t_crt, f, *diff_args)
+        # print(y[:10, :10])
         if i % 20 == 0:
             print(f"step {i}")
+            print(f"max T is {np.max(y[:, 0])}")
+            inspect(y, y0)
             if not np.all(np.isfinite(y)):
                 print(f"Found np.inf or np.nan in y - stop the program")             
                 exit()
@@ -104,35 +52,127 @@ def odeint(polygon_mesh, stepper, f, y0, ts, *diff_args):
     return ys
 
 
-def build_graph(polygon_mesh):
-    num_grains = len(polygon_mesh.regions)
-    num_orientations = polygon_mesh.num_orientations
+def inspect(y, y0):
+    eta0 = np.argmax(y0[:, 2:], axis=1)
+    eta = np.argmax(y[:, 2:], axis=1)
+    change_eta = np.where(eta0 == eta, 0, 1)
+    zeta = y[:, 1]
+    change_zeta = np.where(zeta < 0.1, 1, 0)
+    T = y[:, 0]
+    change_T = np.where(T > args.T_melt, 1, 0)
+
+    print(f"percet of T > T_melt = {np.sum(change_T)/len(change_T)*100}%")
+    print(f"percet of liquid = {np.sum(change_zeta)/len(change_zeta)*100}%")
+    print(f"percent of change of oris = {np.sum(change_eta)/len(change_eta)*100}%")
+
+
+def construct_polycrystal():
+    unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
+    oris_indics = onp.random.randint(args.num_oris, size=args.num_grains)
+    oris = onp.take(unique_oris, oris_indics, axis=0)
+    onp.savetxt(f'data/neper/input.ori', oris)
+
+    stface = onp.loadtxt(f'data/neper/domain.stface')
+    face_centroids = stface[:, :3]
+    face_areas = stface[:, 3]
+
+    edges = [[] for i in range(len(face_areas))]
+    centroids = []
+    volumes = []
+ 
+    file = open('data/neper/domain.stcell', 'r')
+    lines = file.readlines()
+    num_grains = len(lines)
+
+    boundary_face_areas = onp.zeros((num_grains, 6))
+    boundary_face_centroids = onp.zeros((num_grains, 6, args.dim))
+
+    for i, line in enumerate(lines):
+        l = line.split()
+        centroids.append([float(l[0]), float(l[1]), float(l[2])])
+        volumes.append(float(l[3]))
+        l = l[4:]
+        num_nb_faces = len(l)
+        for j in range(num_nb_faces):
+            edges[int(l[j]) - 1].append(i)
+
+    centroids = np.array(centroids)
+    volumes = np.array(volumes)
+
+    new_face_areas = []
+    new_edges = []
+
+    def face_centroids_to_boundary_index(face_centroid):
+        domains = [args.domain_length, args.domain_width, args.domain_height]
+        for i, domain in enumerate(domains):
+            if onp.isclose(face_centroid[i], 0., atol=1e-08):
+                return 2*i
+            if onp.isclose(face_centroid[i], domain, atol=1e-08):
+                return 2*i + 1
+        raise ValueError(f"Expect a boundary face, got centroid {face_centroid} that is not on any boundary.")
+
+    for i, edge in enumerate(edges):
+        if len(edge) == 1:
+            grain_index = edge[0]
+            boundary_index = face_centroids_to_boundary_index(face_centroids[i])
+            face_area = face_areas[i]
+            face_centroid = face_centroids[i]
+            boundary_face_areas[grain_index, boundary_index] = face_area
+            boundary_face_centroids[grain_index, boundary_index] = face_centroid
+        elif len(edge) == 2:
+            new_edges.append(edge)
+            new_face_areas.append(face_areas[i])
+        else:
+            raise ValueError(f"Number of connected grains for any face must be 1 or 2, got {len(edge)}.")
+
+    new_edges = onp.array(new_edges)
+    new_face_areas = onp.array(new_face_areas)
+
+    print(new_edges.shape)
+    print(new_edges[:10])
+    print(onp.sum(boundary_face_areas, axis=0))
+ 
+    PolyCrystal = namedtuple('PolyCrystal', ['edges', 'face_areas', 'centroids', 'volumes', 'unique_oris', 
+                                             'oris_indics', 'boundary_face_areas', 'boundary_face_centroids'])
+    polycrystal = PolyCrystal(new_edges, new_face_areas, centroids, volumes, unique_oris, 
+                              oris_indics, boundary_face_areas, boundary_face_centroids)
+
+    return polycrystal
+
+
+def build_graph(polycrystal):
     senders = []
     receivers = []
 
-    for edge in polygon_mesh.facet_neighbors:
-        if edge[0] >=0 and edge[1] >= 0:
-            senders += list(edge)
-            receivers += list(edge[::-1])
+    for edge in polycrystal.edges:
+        senders += list(edge)
+        receivers += list(edge[::-1])
 
-    n_node = np.array([num_grains])
+    n_node = np.array([args.num_grains])
     n_edge = np.array([len(senders)])
 
     print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
 
-    solid_phases = np.ones(num_grains)
-    grain_orientations = np.zeros((num_grains, num_orientations))
-    inds = jax.ops.index[np.arange(num_grains), polygon_mesh.orientations]
+    solid_phases = np.ones(args.num_grains)
+
+    grain_orientations = np.zeros((args.num_grains, args.num_oris))
+    inds = jax.ops.index[np.arange(args.num_grains), polycrystal.oris_indics]
     grain_orientations = jax.ops.index_update(grain_orientations, inds, 1)
-    temp = 300.*np.ones(num_grains)
+
+    temp = 300.*np.ones(args.num_grains)
     senders = np.array(senders)
     receivers = np.array(receivers)
 
     state = np.hstack((temp[:, None], solid_phases[:, None], grain_orientations))
 
-    node_features = {'state':state, 'centroids': polygon_mesh.centroids}
+    node_features = {'state':state, 
+                     'centroids': polycrystal.centroids,
+                     'volumes': polycrystal.volumes[:, None],
+                     'boundary_face_areas': polycrystal.boundary_face_areas, 
+                     'boundary_face_centroids': polycrystal.boundary_face_centroids}
+    edge_features = {'face_areas': np.repeat(polycrystal.face_areas, 2)[:, None]}
     global_features = {'t': 0.}
-    graph = jraph.GraphsTuple(nodes=node_features, edges={}, senders=senders, receivers=receivers,
+    graph = jraph.GraphsTuple(nodes=node_features, edges=edge_features, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals=global_features)
 
     return graph, state
@@ -141,16 +181,17 @@ def build_graph(polygon_mesh):
 def update_graph():
 
     def update_edge_fn(edges, senders, receivers, globals_):
-        del edges, globals_
+        del globals_
         sender_T, sender_zeta, sender_eta = unpack_state(senders['state'])
         receiver_T, receiver_zeta, receiver_eta = unpack_state(receivers['state'])
-
-        coeff_T = 1e-2
-        grad_energy_T = coeff_T * np.sum((sender_T - receiver_T)**2)
-        coeff_zeta = 1e-3
-        grad_energy_zeta = coeff_zeta * np.sum((sender_zeta - receiver_zeta)**2)
-        coeff_eta = 1e-3
-        grad_energy_eta = coeff_eta * np.sum((sender_eta - receiver_eta)**2)
+        face_areas = edges['face_areas']
+ 
+        coeff_T = 1.
+        grad_energy_T = coeff_T * np.sum((sender_T - receiver_T)**2 * face_areas)
+        coeff_zeta = 0.5
+        grad_energy_zeta = coeff_zeta * np.sum((sender_zeta - receiver_zeta)**2 * face_areas)
+        coeff_eta = 0.5
+        grad_energy_eta = coeff_eta * np.sum((sender_eta - receiver_eta)**2 * face_areas)
         grad_energy = grad_energy_T + grad_energy_zeta + grad_energy_eta
 
         return {'grad_energy': grad_energy}
@@ -160,29 +201,45 @@ def update_graph():
 
         t = globals_['t'][0]
         T, zeta, eta = unpack_state(nodes['state'])
-        centroids = nodes['centroids']
-
-        T_melt = 800.
+        boundary_face_areas = nodes['boundary_face_areas']
+        boundary_face_centroids = nodes['boundary_face_centroids']
+        volumes = nodes['volumes']
+ 
         T_ambient = 300.        
-        coeff_ambient = 5.
-        q_ambient = coeff_ambient*(T_ambient - T).reshape(-1)
-        coeff_laser = 2*1e5
-        length_scale = 0.15
+        coeff_convection = 1e2
+        coeff_radiation = 1e-6
+        q_ambient_convection = np.sum(coeff_convection*(T_ambient - T)*boundary_face_areas, axis=1)
+        q_ambient_radiation = np.sum(coeff_radiation*(T_ambient**4 - T**4)*boundary_face_areas, axis=1)
+        q_ambient = q_ambient_convection + q_ambient_radiation
+
+        coeff_laser = 1e11
+        # coeff_laser = 0.
+
+        length_scale = args.domain_width/10.
         # laser_pos = np.array([0., 0.])
         # laser_gate = np.where(t < 0.02, 1., 0.)
-        laser_pos = np.array([t/0.1*4 - 2., 0.])
+        laser_pos = np.array([t/0.1*0.6*args.domain_length + 0.2*args.domain_length, args.domain_width/2., args.domain_height])
         laser_gate = np.where(t < 0.1, 1., 0.)
-        q_laser = laser_gate * coeff_laser * np.exp(-np.sum((centroids - laser_pos[None, :])**2, axis=1) / (2 * length_scale**2))
-        q = q_ambient + q_laser
+        upper_face_centroids = boundary_face_centroids[:, -1, :]
+        upper_face_areas = boundary_face_areas[:, -1]
+        q_laser = laser_gate * coeff_laser * np.exp(-np.sum((upper_face_centroids - laser_pos[None, :])**2, axis=1) / (2 * length_scale**2)) * upper_face_areas
 
-        m_phase = 1e1
-        phi = 0.5 * (1 - np.tanh(1e1*(T/T_melt - 1)))
-        phase_energy = m_phase * np.sum(((1 - zeta)**2 * phi +  zeta**2 * (1 - phi)))
-        m_grain = 1e1
-        gamma = 1.
+        q = q_ambient + q_laser # q shape (args.num_grains,)
+
+        m_phase = 1e5
+        phi = 0.5 * (1 - np.tanh(1e1*(T/args.T_melt - 1)))
+        phase_energy = m_phase * np.sum(((1 - zeta)**2 * phi + zeta**2 * (1 - phi)) * volumes)
+        m_grain = 1e5
+        gamma = 1
+        beta = 1
         vmap_outer = jax.vmap(np.outer, in_axes=(0, 0))
-        grain_energy = m_grain * (np.sum(eta**4/4. - eta**2/2.) + gamma*(np.sum(vmap_outer(eta, eta)**2) - np.sum(eta**4)) + 
-                       np.sum((1 - zeta.reshape(-1))**2 * np.sum(eta**2, axis=1)))
+        grain_energy_1 = np.sum((eta**4/4. - eta**2/2.) * volumes)
+        graph_energy_2 = gamma * (np.sum(np.sum(vmap_outer(eta, eta)**2, axis=(1, 2))[:, None] * volumes) - np.sum(eta**4 * volumes))
+
+        graph_energy_3 = beta * np.sum((1 - zeta.reshape(-1))**2 * np.sum(eta**2, axis=1) * volumes.reshape(-1))
+        # graph_energy_3 = 0.
+
+        grain_energy = m_grain * (grain_energy_1 +  graph_energy_2 + graph_energy_3)
         local_energy = phase_energy + grain_energy
 
         return {'heat_source': q, 'local_energy': local_energy}
@@ -208,11 +265,11 @@ def phase_field(graph):
         new_graph = net_fn(graph)
         return new_graph.globals['total_energy'][0], new_graph.nodes['heat_source']
 
-    grad_grad = jax.grad(lambda y, t: compute_energy(y, t)[0])
+    grad_energy = jax.grad(lambda y, t: compute_energy(y, t)[0])
 
     def state_rhs(y, t, *diff_args):
         _, source = compute_energy(y, t)
-        grads = grad_grad(y, t)
+        grads = grad_energy(y, t)
         rhs = np.hstack(((source - grads[:, 0])[:, None], -grads[:, 1:]))
         return rhs
 
@@ -220,23 +277,74 @@ def phase_field(graph):
 
 
 def simulate(ts):
-    polygon_mesh = generate_microsctructure()
-    graph, y0 = build_graph(polygon_mesh)
+    polycrystal = construct_polycrystal()
+    graph, y0 = build_graph(polycrystal)
     state_rhs = phase_field(graph)
-    ys_ = odeint(polygon_mesh, explicit_euler, state_rhs, y0, ts)
+    ys_ = odeint(explicit_euler, state_rhs, y0, ts)
     ys = np.vstack((y0[None, :], ys_))  
-    return ys, polygon_mesh
+
+
+    T_final = ys[-1, :, 0]
+    zeta_final = ys[-1, :, 1]
+    eta_final = ys[-1, :, 2:]
+
+    onp.savetxt(f'data/neper/temp', T_final)
+    onp.savetxt(f'data/neper/phase', zeta_final)
+    oris_indics = np.argmax(eta_final, axis=1)
+    oris = onp.take(polycrystal.unique_oris, oris_indics, axis=0)
+    onp.savetxt(f'data/neper/oris', oris)
+
+    return ys, polycrystal
 
 
 def exp():
     dt = 1e-4
     ts = np.arange(0., dt*2001, dt)
-    ys, polygon_mesh = simulate(ts)
-    save_animation(ys[::20], polygon_mesh)
+    ys, polycrystal = simulate(ts)
+
+    # show_3d_scatters(ys[-1, :, :], polycrystal)
+ 
+    show_3d_scatters(ys[1000, :, :], polycrystal)
+    show_3d_scatters(ys[2000, :, :], polycrystal)
+
+    # save_animation(ys[::20], polycrystal)
+
+
+def show_3d_scatters(y, polycrystal):
+    x1, x2, x3 = polycrystal.centroids.T
+    T = y[:, 0]
+    zeta = y[:, 1]
+    eta = y[:, 2:]
+    oris_indics = np.argmax(eta, axis=1)
+
+    cut = args.domain_width/2.
+
+    x1_show = x1[x2 > cut]
+    x2_show = x2[x2 > cut]
+    x3_show = x3[x2 > cut]
+    T_show = T[x2 > cut]
+    zeta_show = zeta[x2 > cut]
+    oris_indics_show = oris_indics[x2 > cut]
+    
+    fig = plt.figure(figsize=(8, 6))
+    ax = plt.axes(projection="3d")
+    p = ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=T_show, alpha=1, vmin=280, vmax=2000)
+    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
+    cbar = fig.colorbar(p)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = plt.axes(projection="3d")
+    p = ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=zeta_show, alpha=1, vmin=0, vmax=1)
+    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
+    cbar = fig.colorbar(p)
+
+    fig = plt.figure(figsize=(8, 6))
+    ax = plt.axes(projection="3d")
+    ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=oris_indics_show, alpha=1)
+    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
 
 
 if __name__ == "__main__":
     exp()
     plt.show()
-
-
+    # show_3d_scatters()
