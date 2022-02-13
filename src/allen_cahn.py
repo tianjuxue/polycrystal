@@ -26,7 +26,7 @@ def rk4(state, t_crt, f, *diff_args):
     return (y_crt, t_crt), y_crt
 
 
-@partial(jax.jit, static_argnums=(2,))
+# @partial(jax.jit, static_argnums=(2,))
 def explicit_euler(state, t_crt, f, *diff_args):
     y_prev, t_prev = state
     h = t_crt - t_prev
@@ -39,9 +39,9 @@ def odeint(stepper, f, y0, ts, *diff_args):
     state = (y0, ts[0])
     for (i, t_crt) in enumerate(ts[1:]):
         state, y = stepper(state, t_crt, f, *diff_args)
-        # print(y[:10, :10])
         if i % 20 == 0:
             print(f"step {i}")
+            print(y[:10, :10])
             print(f"max T is {np.max(y[:, 0])}")
             inspect(y, y0)
             if not np.all(np.isfinite(y)):
@@ -96,8 +96,8 @@ def construct_polycrystal():
         for j in range(num_nb_faces):
             edges[int(l[j]) - 1].append(i)
 
-    centroids = np.array(centroids)
-    volumes = np.array(volumes)
+    centroids = onp.array(centroids)
+    volumes = onp.array(volumes)
 
     new_face_areas = []
     new_edges = []
@@ -128,13 +128,17 @@ def construct_polycrystal():
     new_edges = onp.array(new_edges)
     new_face_areas = onp.array(new_face_areas)
 
+    centroids_1 = onp.take(centroids, new_edges[:, 0], axis=0)
+    centroids_2 = onp.take(centroids, new_edges[:, 1], axis=0)
+    grain_distances = onp.sqrt(onp.sum((centroids_1 - centroids_2)**2, axis=1))
+
     print(new_edges.shape)
     print(new_edges[:10])
     print(onp.sum(boundary_face_areas, axis=0))
  
-    PolyCrystal = namedtuple('PolyCrystal', ['edges', 'face_areas', 'centroids', 'volumes', 'unique_oris', 
+    PolyCrystal = namedtuple('PolyCrystal', ['edges', 'face_areas', 'grain_distances', 'centroids', 'volumes', 'unique_oris', 
                                              'oris_indics', 'boundary_face_areas', 'boundary_face_centroids'])
-    polycrystal = PolyCrystal(new_edges, new_face_areas, centroids, volumes, unique_oris, 
+    polycrystal = PolyCrystal(new_edges, new_face_areas, grain_distances, centroids, volumes, unique_oris, 
                               oris_indics, boundary_face_areas, boundary_face_centroids)
 
     return polycrystal
@@ -170,7 +174,8 @@ def build_graph(polycrystal):
                      'volumes': polycrystal.volumes[:, None],
                      'boundary_face_areas': polycrystal.boundary_face_areas, 
                      'boundary_face_centroids': polycrystal.boundary_face_centroids}
-    edge_features = {'face_areas': np.repeat(polycrystal.face_areas, 2)[:, None]}
+    edge_features = {'face_areas': np.repeat(polycrystal.face_areas, 2)[:, None],
+                     'grain_distances': np.repeat(polycrystal.grain_distances, 2)[:, None]}
     global_features = {'t': 0.}
     graph = jraph.GraphsTuple(nodes=node_features, edges=edge_features, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals=global_features)
@@ -185,13 +190,17 @@ def update_graph():
         sender_T, sender_zeta, sender_eta = unpack_state(senders['state'])
         receiver_T, receiver_zeta, receiver_eta = unpack_state(receivers['state'])
         face_areas = edges['face_areas']
+        grain_distances = edges['grain_distances']
+
+        assert face_areas.shape == grain_distances.shape
  
-        coeff_T = 1.
-        grad_energy_T = coeff_T * np.sum((sender_T - receiver_T)**2 * face_areas)
-        coeff_zeta = 0.5
-        grad_energy_zeta = coeff_zeta * np.sum((sender_zeta - receiver_zeta)**2 * face_areas)
-        coeff_eta = 0.5
-        grad_energy_eta = coeff_eta * np.sum((sender_eta - receiver_eta)**2 * face_areas)
+        # coeff_T = 5*1e-2
+        coeff_T = args.kappa/4.
+        grad_energy_T = coeff_T * np.sum((sender_T - receiver_T)**2 * face_areas / grain_distances)
+        coeff_zeta = 1e-2
+        grad_energy_zeta = coeff_zeta * np.sum((sender_zeta - receiver_zeta)**2 * face_areas / grain_distances)
+        coeff_eta = 1e-2
+        grad_energy_eta = coeff_eta * np.sum((sender_eta - receiver_eta)**2 * face_areas / grain_distances)
         grad_energy = grad_energy_T + grad_energy_zeta + grad_energy_eta
 
         return {'grad_energy': grad_energy}
@@ -204,25 +213,49 @@ def update_graph():
         boundary_face_areas = nodes['boundary_face_areas']
         boundary_face_centroids = nodes['boundary_face_centroids']
         volumes = nodes['volumes']
+        centroids = nodes['centroids']
  
         T_ambient = 300.        
-        coeff_convection = 1e2
-        coeff_radiation = 1e-6
-        q_ambient_convection = np.sum(coeff_convection*(T_ambient - T)*boundary_face_areas, axis=1)
-        q_ambient_radiation = np.sum(coeff_radiation*(T_ambient**4 - T**4)*boundary_face_areas, axis=1)
-        q_ambient = q_ambient_convection + q_ambient_radiation
+        # coeff_convection = 1.
+        # q_ambient_convection = np.sum(coeff_convection*(T_ambient - T)*boundary_face_areas, axis=1)
+        # coeff_radiation = 1e-7
 
-        coeff_laser = 1e11
-        # coeff_laser = 0.
+        coeff_radiation = args.emissivity * args.SB_constant
+        q_ambient_radiation = coeff_radiation*np.sum((T_ambient**4 - T**4)*boundary_face_areas, axis=1)
+        q_ambient = q_ambient_radiation
 
-        length_scale = args.domain_width/10.
-        # laser_pos = np.array([0., 0.])
-        # laser_gate = np.where(t < 0.02, 1., 0.)
-        laser_pos = np.array([t/0.1*0.6*args.domain_length + 0.2*args.domain_length, args.domain_width/2., args.domain_height])
-        laser_gate = np.where(t < 0.1, 1., 0.)
-        upper_face_centroids = boundary_face_centroids[:, -1, :]
-        upper_face_areas = boundary_face_areas[:, -1]
-        q_laser = laser_gate * coeff_laser * np.exp(-np.sum((upper_face_centroids - laser_pos[None, :])**2, axis=1) / (2 * length_scale**2)) * upper_face_areas
+        q_ambient = 0.
+
+        # coeff_laser = 1e10
+        coeff_laser = args.power * 3 / (np.pi * args.r_beam**2)
+
+        length_scale = args.domain_width/5.
+        # laser_pos = np.array([args.domain_length/2., args.domain_width/2., args.domain_height])
+        # laser_gate = np.where(t < 0.1, 1., 0.)
+        hafl_time = 600*1e-6
+        laser_pos = np.array([t/hafl_time*0.6*args.domain_length + 0.2*args.domain_length, args.domain_width/2., args.domain_height])
+        laser_gate = np.where(t < hafl_time, 1., 0.)
+
+        # q_laser = laser_gate * coeff_laser * np.exp(-3 * np.sum((centroids[:, :2] - laser_pos[None, :2])**2, axis=1) / (args.r_beam**2)) * \
+        #           2 / args.h_depth * (1 - (args.domain_height - centroids[:, 2]) / args.h_depth) * volumes.reshape(-1)
+
+        q_laser = laser_gate * coeff_laser * np.exp(-3 * np.sum((centroids - laser_pos[None, :])**2, axis=1) / (args.r_beam**2)) * \
+                  volumes.reshape(-1)
+
+        # upper_face_centroids = boundary_face_centroids[:, -1, :]
+        # upper_face_areas = boundary_face_areas[:, -1]
+        # q_laser = laser_gate * coeff_laser * np.exp(-3 * np.sum((upper_face_centroids[:, :2] - laser_pos[None, :2])**2, axis=1) / (args.r_beam**2)) * \
+        #           upper_face_areas
+
+ 
+        # print(f"q_laser bound = {coeff_laser} x {np.max(volumes)} = {coeff_laser * np.max(volumes)}")
+        print(f"np.max(q_laser) = {np.max(q_laser)}, np.mean(q_laser) = {np.mean(q_laser)}")
+
+        # exit()
+
+        # upper_face_centroids = boundary_face_centroids[:, -1, :]
+        # upper_face_areas = boundary_face_areas[:, -1]
+        # q_laser = laser_gate * coeff_laser * np.exp(-np.sum((upper_face_centroids - laser_pos[None, :])**2, axis=1) / (2 * length_scale**2)) * upper_face_areas
 
         q = q_ambient + q_laser # q shape (args.num_grains,)
 
@@ -231,14 +264,16 @@ def update_graph():
         phase_energy = m_phase * np.sum(((1 - zeta)**2 * phi + zeta**2 * (1 - phi)) * volumes)
         m_grain = 1e5
         gamma = 1
-        beta = 1
+
+
+        # beta = 1
+        beta = 0.
+
         vmap_outer = jax.vmap(np.outer, in_axes=(0, 0))
         grain_energy_1 = np.sum((eta**4/4. - eta**2/2.) * volumes)
         graph_energy_2 = gamma * (np.sum(np.sum(vmap_outer(eta, eta)**2, axis=(1, 2))[:, None] * volumes) - np.sum(eta**4 * volumes))
-
         graph_energy_3 = beta * np.sum((1 - zeta.reshape(-1))**2 * np.sum(eta**2, axis=1) * volumes.reshape(-1))
-        # graph_energy_3 = 0.
-
+ 
         grain_energy = m_grain * (grain_energy_1 +  graph_energy_2 + graph_energy_3)
         local_energy = phase_energy + grain_energy
 
@@ -258,6 +293,13 @@ def update_graph():
 
 def phase_field(graph):
     net_fn = update_graph()
+    # TODO: seems ugly
+    volumes = graph.nodes['volumes']
+
+    # print(np.min(volumes))
+    # print(np.max(volumes))
+    # exit()
+
 
     def compute_energy(y, t):
         graph.globals['t'] = t
@@ -270,7 +312,20 @@ def phase_field(graph):
     def state_rhs(y, t, *diff_args):
         _, source = compute_energy(y, t)
         grads = grad_energy(y, t)
-        rhs = np.hstack(((source - grads[:, 0])[:, None], -grads[:, 1:]))
+
+        T_rhs = (source - grads[:, 0])[:, None] / (args.rho * args.c_h * volumes)
+
+
+        a = source[:, None] / (args.rho * args.c_h * volumes) * 1e-6
+        b = grads[:, 0][:, None] / (args.rho * args.c_h * volumes) * 1e-6
+ 
+        print(f"max a = {np.max(a)}, mean a = {np.mean(a)},")
+        print(f"max b = {np.max(b)}, mean b = {np.mean(b)},")
+        # print(f"bound a = {args.power * 3 / (np.pi * args.r_beam**2) * 1e-6 / (args.rho * args.c_h)}")
+
+        # exit()
+
+        rhs = np.hstack((T_rhs, -grads[:, 1:]))
         return rhs
 
     return state_rhs
@@ -298,8 +353,12 @@ def simulate(ts):
 
 
 def exp():
-    dt = 1e-4
-    ts = np.arange(0., dt*2001, dt)
+    # dt = 1e-4
+    # ts = np.arange(0., dt*2001, dt)
+
+    dt = 1e-6
+    ts = np.arange(0., dt*1201, dt)
+
     ys, polycrystal = simulate(ts)
 
     # show_3d_scatters(ys[-1, :, :], polycrystal)

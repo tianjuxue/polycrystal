@@ -23,10 +23,22 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--num_oris', type=int, default=20)
 parser.add_argument('--num_grains', type=int, default=20000)
 parser.add_argument('--dim', type=int, default=3)
-parser.add_argument('--domain_height', type=float, default=0.1)
-parser.add_argument('--domain_width', type=float, default=0.2)
-parser.add_argument('--domain_length', type=float, default=1.)
-parser.add_argument('--T_melt', type=float, default=1500.)
+parser.add_argument('--domain_height', type=float, help='Unit: mm', default=0.1)
+parser.add_argument('--domain_width', type=float, help='Unit: mm', default=0.2)
+parser.add_argument('--domain_length', type=float, help='Unit: mm', default=1.)
+parser.add_argument('--T_melt', type=float, help='Unit: K', default=1700.)
+parser.add_argument('--rho', type=float, help='Unit: kg/mm^3', default=8.e-6)
+parser.add_argument('--c_h', type=float, help='Unit: J/(kg*K)', default=770.)
+parser.add_argument('--power', type=float, help='Unit: W', default=100.)
+parser.add_argument('--r_beam', type=float, help='Unit: mm', default=0.05)
+parser.add_argument('--h_depth', type=float, help='Unit: mm', default=0.1)
+parser.add_argument('--emissivity', type=float, help='Unit:', default=0.2)
+parser.add_argument('--SB_constant', type=float, help='Unit: W/(mm^2*K*4)', default=5.67*1e-14)
+parser.add_argument('--kappa', type=float, help='Unit: W/(mm*K)', default=1.5*1e-2)
+
+
+
+
 args = parser.parse_args()
 
 # Latex style plot
