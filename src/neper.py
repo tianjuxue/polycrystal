@@ -34,7 +34,6 @@ def simple():
 
 
 def show_part():
-
     cut = args.domain_width/2.
 
     # temperature
@@ -45,23 +44,23 @@ def show_part():
     #     -datacellcolscheme plasma -datacelltrs 0.5 -print data/png/temp')
 
     # phase
-    # os.system(f'neper -V data/neper/domain.tess -showedge 0 -showcell "y>{cut}" -datacellcol real:"file(data/neper/phase)" \
-    #     -datacellcolscheme plasma -datacellscale 0:1 -datacelltrs 0 -print data/png/phase')
+    os.system(f'neper -V data/neper/domain.tess -showedge 0 -showcell "y>{cut}" -datacellcol real:"file(data/neper/phase)" \
+        -datacellcolscheme plasma -datacellscale 0:1 -datacelltrs 0 -print data/png/phase')
 
     # ori
-    # os.system(f'neper -V data/neper/domain.tess -showedge 0 -datacellcol ori:"file(data/neper/oris)" \
-    #     -datacellcolscheme "ipf(z)" -datacelltrs 0 -print data/png/oris')
+    os.system(f'neper -V data/neper/domain.tess -showedge 0 -showcell "y>{cut}" -datacellcol ori:"file(data/neper/oris)" \
+        -datacellcolscheme "ipf(z)" -datacelltrs 0 -print data/png/oris')
 
-    # os.system(f'neper -V data/neper/domain.tess -showedge 0 -datacellcol ori:"file(data/neper/oris)" \
-    #     -datacellcolscheme "ipf(z)" -datacelltrs 0 -cameracoo {args.domain_length/2.}:{args.domain_width/2.}:2.5 \
-    #     -cameralookat {args.domain_length/2.}:{args.domain_width/2.}:{args.domain_height} -print data/png/oris_above')
+    os.system(f'neper -V data/neper/domain.tess -showedge 0 -datacellcol ori:"file(data/neper/oris)" \
+        -datacellcolscheme "ipf(z)" -datacelltrs 0 -cameracoo {args.domain_length/2.}:{args.domain_width/2.}:2.5 \
+        -cameralookat {args.domain_length/2.}:{args.domain_width/2.}:{args.domain_height} -print data/png/oris_above')
 
-    # os.system(f'neper -V data/neper/domain.tess -showedge 0 -showcell "y>{cut}" -datacellcol ori:"file(data/neper/oris)" \
-    #     -datacellcolscheme "ipf(z)" -datacelltrs 0 -cameracoo {args.domain_length/2.}:-3:{args.domain_height} \
-    #     -cameralookat {args.domain_length/2.}:{args.domain_width/2.}:{args.domain_height} -print data/png/oris_side')
+    os.system(f'neper -V data/neper/domain.tess -showedge 0 -showcell "y>{cut}" -datacellcol ori:"file(data/neper/oris)" \
+        -datacellcolscheme "ipf(z)" -datacelltrs 0 -cameracoo {args.domain_length/2.}:-3:{args.domain_height} \
+        -cameralookat {args.domain_length/2.}:{args.domain_width/2.}:{args.domain_height} -print data/png/oris_side')
 
 
 if __name__ == "__main__":
     # exp()
-    # show_part()
-    simple()
+    show_part()
+    # simple()

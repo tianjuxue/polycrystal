@@ -37,8 +37,6 @@ parser.add_argument('--SB_constant', type=float, help='Unit: W/(mm^2*K*4)', defa
 parser.add_argument('--kappa', type=float, help='Unit: W/(mm*K)', default=1.5*1e-2)
 
 
-
-
 args = parser.parse_args()
 
 # Latex style plot

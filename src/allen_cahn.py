@@ -9,10 +9,11 @@ from functools import partial
 from scipy.spatial.transform import Rotation as R
 from collections import namedtuple
 from matplotlib import pyplot as plt
-import microstructpy as msp
 from src.arguments import args
-from src.plots import poly_plot, save_animation
+from src.plots import save_animation
 from src.utils import unpack_state
+
+args.ad_hoc = 0.1
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -48,26 +49,27 @@ def odeint(stepper, compute_T, f, y0, ts, *diff_args):
             print(f"step {i}")
             T = compute_T(t_crt)
             all_state = np.hstack((T, y))
-            print(all_state[:20, :5])
+            print(all_state[:10, :5])
             inspect_y(y, y0)
             inspect_T(T)
             if not np.all(np.isfinite(y)):
                 print(f"Found np.inf or np.nan in y - stop the program")             
                 exit()
-        ys.append(y)
+        if i % 100 == 0:
+            ys.append(y)
     ys = np.array(ys)
     return ys
 
 
 def inspect_y(y, y0):
     zeta = y[:, 0]
-    change_zeta = np.where(zeta < 0.1, 1, 0)
+    change_zeta = np.where(zeta < 0.5, 1, 0)
 
     eta0 = np.argmax(y0[:, 1:], axis=1)
     eta = np.argmax(y[:, 1:], axis=1)
     change_eta = np.where(eta0 == eta, 0, 1)
 
-    print(f"percet of liquid = {np.sum(change_zeta)/len(change_zeta)*100}%")
+    print(f"percet of change of zeta (liquid) = {np.sum(change_zeta)/len(change_zeta)*100}%")
     print(f"percent of change of oris = {np.sum(change_eta)/len(change_eta)*100}%")
 
 
@@ -78,6 +80,7 @@ def inspect_T(T):
 
 
 def construct_polycrystal():
+    args.num_oris = 20
     unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
     oris_indics = onp.random.randint(args.num_oris, size=args.num_grains)
     oris = onp.take(unique_oris, oris_indics, axis=0)
@@ -91,12 +94,12 @@ def construct_polycrystal():
     centroids = []
     volumes = []
  
-    file = open('data/neper/domain.stcell', 'r')
+    file = open(f'data/neper/domain.stcell', 'r')
     lines = file.readlines()
-    num_grains = len(lines)
-
-    boundary_face_areas = onp.zeros((num_grains, 6))
-    boundary_face_centroids = onp.zeros((num_grains, 6, args.dim))
+    assert args.num_grains == len(lines)
+ 
+    boundary_face_areas = onp.zeros((args.num_grains, 6))
+    boundary_face_centroids = onp.zeros((args.num_grains, 6, args.dim))
 
     for i, line in enumerate(lines):
         l = line.split()
@@ -152,78 +155,113 @@ def construct_polycrystal():
     polycrystal = PolyCrystal(new_edges, new_face_areas, grain_distances, centroids, volumes, unique_oris, 
                               oris_indics, boundary_face_areas, boundary_face_centroids)
 
+    domain_vol = args.domain_length*args.domain_width*args.domain_height
+    args.ch_len = (domain_vol / args.num_grains)**(1./3.)
+    print(f"ch_len = {args.ch_len}")
+
     return polycrystal
 
 
 def finite_difference():
-
     filepath = f'data/neper/domain.msh'
     mesh = meshio.read(filepath)
     mesh.write(f'data/vtk/domain.vtk')
-
     points = mesh.points
     cells =  mesh.cells_dict['hexahedron']
+
+    cell_grain_inds = mesh.cell_data['gmsh:physical'][0]
+    assert args.num_grains == np.max(cell_grain_inds)
+
+    args.num_oris = 10
+    grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
+    cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
 
     Nx = round(args.domain_length / points[1, 0])
     Ny = round(args.domain_width / points[Nx + 1, 1])
     Nz = round(args.domain_height / points[(Nx + 1)*(Ny + 1), 2])
 
-    print(f"total num of cells = {len(cells)}")
-
+    print(f"Total num of grains = {args.num_grains}")
+    print(f"Total num of orientations = {args.num_oris}")
+    print(f"Total num of finite difference cells = {len(cells)}")
     assert Nx*Ny*Nz == len(cells)
 
     edges = []
     for i in range(Nx):
-        print(f"i = {i}")
+        if i % 100 == 0:
+            print(f"i = {i}")
         for j in range(Ny):
             for k in range(Nz):
                 crt_ind = i + j * Nx + k * Nx * Ny
-                if i != 0:
-                    edges.append([crt_ind, (i - 1) + j * Nx + k * Nx * Ny])
                 if i != Nx - 1:
                     edges.append([crt_ind, (i + 1) + j * Nx + k * Nx * Ny])
-                if j != 0:
-                    edges.append([crt_ind, i + (j - 1) * Nx + k * Nx * Ny])
                 if j != Ny - 1:
                     edges.append([crt_ind, i + (j + 1) * Nx + k * Nx * Ny])
-                if k != 0:
-                    edges.append([crt_ind, i + j * Nx + (k - 1) * Nx * Ny])
                 if k != Nz - 1:
                     edges.append([crt_ind, i + j * Nx + (k + 1) * Nx * Ny])
 
+    edges = np.array(edges)
+    cell_points = np.take(points, cells, axis=0)
+    centroids = np.mean(cell_points, axis=1)
+    domain_vol = args.domain_length*args.domain_width*args.domain_height
+    volumes = domain_vol / (Nx*Ny*Nz) * np.ones(len(cells))
+
+ 
+    PolyCrystal = namedtuple('PolyCrystal', ['edges',  'centroids', 'volumes', 'oris_indics'])
+    polycrystal = PolyCrystal(edges, centroids, volumes, cell_ori_inds)
+
+    args.ch_len = (domain_vol / len(cells))**(1./3.)
+    print(f"ch_len = {args.ch_len}")
+
+
+    print(f"Writing initial mesh...")
+    mesh.cell_data['ori_inds_ini'] = [onp.array(cell_ori_inds, dtype=onp.float32)]
+    # mesh.write(f'data/vtk/sols/u_ini.vtk')
+
+    return polycrystal, mesh
 
 
 def build_graph(polycrystal):
-    senders = []
-    receivers = []
+    # senders = []
+    # receivers = []
+    # for edge in polycrystal.edges:
+    #     senders += list(edge)
+    #     receivers += list(edge[::-1])
 
-    for edge in polycrystal.edges:
-        senders += list(edge)
-        receivers += list(edge[::-1])
+    print(f"Build graph...")
 
-    n_node = np.array([args.num_grains])
+    num_nodes = len(polycrystal.centroids)
+
+    senders = polycrystal.edges[:, 0]
+    receivers = polycrystal.edges[:, 1]
+
+    n_node = np.array([num_nodes])
     n_edge = np.array([len(senders)])
 
     print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
 
-    solid_phases = np.ones(args.num_grains)
+    solid_phases = np.ones(num_nodes)
 
-    grain_orientations = np.zeros((args.num_grains, args.num_oris))
-    inds = jax.ops.index[np.arange(args.num_grains), polycrystal.oris_indics]
-    grain_orientations = jax.ops.index_update(grain_orientations, inds, 1)
+    grain_orientations = np.zeros((num_nodes, args.num_oris))
+    grain_orientations = grain_orientations.at[np.arange(num_nodes), polycrystal.oris_indics].set(1)
 
     senders = np.array(senders)
     receivers = np.array(receivers)
 
     state = np.hstack((solid_phases[:, None], grain_orientations))
 
+    # node_features = {'state':state, 
+    #                  'centroids': polycrystal.centroids,
+    #                  'volumes': polycrystal.volumes[:, None],
+    #                  'boundary_face_areas': polycrystal.boundary_face_areas, 
+    #                  'boundary_face_centroids': polycrystal.boundary_face_centroids}
+    # edge_features = {'face_areas': np.repeat(polycrystal.face_areas, 2)[:, None],
+    #                  'grain_distances': np.repeat(polycrystal.grain_distances, 2)[:, None]}
+
     node_features = {'state':state, 
                      'centroids': polycrystal.centroids,
-                     'volumes': polycrystal.volumes[:, None],
-                     'boundary_face_areas': polycrystal.boundary_face_areas, 
-                     'boundary_face_centroids': polycrystal.boundary_face_centroids}
-    edge_features = {'face_areas': np.repeat(polycrystal.face_areas, 2)[:, None],
-                     'grain_distances': np.repeat(polycrystal.grain_distances, 2)[:, None]}
+                     'volumes': polycrystal.volumes[:, None]}
+    edge_features = {}
+
     global_features = {'t': 0.}
     graph = jraph.GraphsTuple(nodes=node_features, edges=edge_features, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals=global_features)
@@ -237,30 +275,31 @@ def update_graph():
         del globals_
         sender_zeta, sender_eta = unpack_state(senders['state'])
         receiver_zeta, receiver_eta = unpack_state(receivers['state'])
-        face_areas = edges['face_areas']
-        grain_distances = edges['grain_distances']
 
-        assert face_areas.shape == grain_distances.shape
+        # face_areas = edges['face_areas']
+        # grain_distances = edges['grain_distances']
+
+        # assert face_areas.shape == grain_distances.shape
   
         # print(f"{face_areas[face_areas < 1e-10]}")
         # print(f"max face area = {np.max(face_areas)}, min face area = {np.min(face_areas)}")
         # print(f"max grain distance = {np.max(grain_distances)}, grain distance = {np.min(grain_distances)}")
-        # exit()
-
+ 
         # coeff_zeta = 2.77*1e-12
         # grad_energy_zeta = coeff_zeta * 0.25 * np.sum((sender_zeta - receiver_zeta)**2 * face_areas / grain_distances)
         # coeff_eta = 2.77*1e-12
         # grad_energy_eta = coeff_eta * 0.25 *np.sum((sender_eta - receiver_eta)**2 * face_areas / grain_distances)
         # grad_energy = grad_energy_zeta + grad_energy_eta
 
-        coeff_zeta = 2.77*1e-12
-        grad_energy_zeta = coeff_zeta * 0.25 * np.sum((sender_zeta - receiver_zeta)**2)
-        coeff_eta = 2.77*1e-12
-        grad_energy_eta = coeff_eta * 0.25 *np.sum((sender_eta - receiver_eta)**2)
+        # Yan's paper kg = 2.77e-9
+
+        coeff_zeta = 2.77*1e-9
+        grad_energy_zeta = coeff_zeta * 0.5 * np.sum((sender_zeta - receiver_zeta)**2) / args.ch_len**2
+        coeff_eta = 2.77*1e-9
+        grad_energy_eta = coeff_eta * 0.5 *np.sum((sender_eta - receiver_eta)**2) / args.ch_len**2
         grad_energy = grad_energy_zeta + grad_energy_eta
 
-        grad_energy = grad_energy / (1e-4)
-
+        grad_energy = grad_energy * args.ad_hoc
 
         return {'grad_energy': grad_energy}
 
@@ -270,10 +309,11 @@ def update_graph():
         t = globals_['t'][0]
         T = nodes['T']
         zeta, eta = unpack_state(nodes['state'])
-        boundary_face_areas = nodes['boundary_face_areas']
-        boundary_face_centroids = nodes['boundary_face_centroids']
-        volumes = nodes['volumes']
-        centroids = nodes['centroids']
+
+        # boundary_face_areas = nodes['boundary_face_areas']
+        # boundary_face_centroids = nodes['boundary_face_centroids']
+        # volumes = nodes['volumes']
+        # centroids = nodes['centroids']
  
         # m_phase = 1.2*1e-4
 
@@ -291,11 +331,12 @@ def update_graph():
 
         # local_energy = phase_energy + grain_energy
 
-        m_phase = 1.2*1e-4
+        # Yan's paper, mp = 1.2e-4, mg = 2.4e-4
+        m_phase = 1.2e-4
         phi = 0.5 * (1 - np.tanh(1e2*(T/args.T_melt - 1)))
         phase_energy = m_phase * np.sum(((1 - zeta)**2 * phi + zeta**2 * (1 - phi)))
 
-        m_grain = 1.2*1e-4
+        m_grain = 2.4e-4
         gamma = 1
         vmap_outer = jax.vmap(np.outer, in_axes=(0, 0))
         grain_energy_1 = np.sum((eta**4/4. - eta**2/2.))
@@ -304,6 +345,8 @@ def update_graph():
         grain_energy = m_grain * (grain_energy_1 +  graph_energy_2 + graph_energy_3)
 
         local_energy = phase_energy + grain_energy
+
+        local_energy = local_energy / args.ad_hoc
 
         return {'local_energy': local_energy}
 
@@ -321,7 +364,7 @@ def update_graph():
 
 def phase_field(graph):
     net_fn = update_graph()
-    volumes = graph.nodes['volumes']
+    # volumes = graph.nodes['volumes']
     centroids = graph.nodes['centroids']
 
     def compute_T(t):
@@ -338,6 +381,7 @@ def phase_field(graph):
         T = T_ambiant + Q / (2 * np.pi * kappa) / R * np.exp(-vel / (2*alpha) * (R + X))
 
         # T = np.where(T > args.T_melt, 2000, T)
+        # T = np.where(T > 2000, 2000, T)
 
         # print(T)
         # exit()
@@ -360,31 +404,31 @@ def phase_field(graph):
 
         gas_const = 8.3
  
+        # Yan's paper
         # Qg = 1.4*1e5
         # L = 3.5e12 * np.exp(-Qg/(T*gas_const))
 
         # Qg = 2.5*1e5
         # L = 6e15 * np.exp(-Qg/(T*gas_const))
 
-        Qg = 1.4*1e5
+        # Qg = 1.4*1e5
         # L = 1e8 * np.exp(-Qg/(T*gas_const))
         # rhs = -L * grads / volumes
 
-        L = 1e5
+        # L = 2*1e3 for gn
+        L = 2*1e2
 
         rhs = -L * grads
 
-        all_var = np.hstack((T, rhs * 2 * 1e-6))
-
-        print(all_var[:100, :5])
-        # exit()
-
+        # all_var = np.hstack((T, rhs * args.dt))
+        # print(all_var[:100, :5])
+ 
         return rhs
 
     return state_rhs, compute_T
 
 
-def simulate(ts):
+def simulate_gn(ts):
     polycrystal = construct_polycrystal()
     graph, y0 = build_graph(polycrystal)
     state_rhs, compute_T = phase_field(graph)
@@ -404,13 +448,36 @@ def simulate(ts):
     return ys, T_final, polycrystal
 
 
+def simulate_fd(ts):
+    polycrystal, mesh = finite_difference()
+    graph, y0 = build_graph(polycrystal)
+    state_rhs, compute_T = phase_field(graph)
+    ys_ = odeint(explicit_euler, compute_T, state_rhs, y0, ts)
+    ys = np.vstack((y0[None, :], ys_))
+    zeta_final = ys[-1, :, 0]
+    eta_final = ys[-1, :, 1:]
+
+    oris_indics = np.argmax(eta_final, axis=1)
+    # oris = onp.take(polycrystal.unique_oris, oris_indics, axis=0)
+
+    mesh.cell_data['zeta'] = [onp.array(zeta_final, dtype=onp.float32)]
+    mesh.cell_data['ori_inds_fnl'] = [onp.array(oris_indics, dtype=onp.float32)]
+    mesh.write(f'data/vtk/sols/u_final.vtk')
+
+
 def exp():
-    dt = 2 * 1e-6
-    ts = np.arange(0., dt*1201, dt)
-    ys, T, polycrystal = simulate(ts)
-    show_3d_scatters(ys[-1, :, :], T, polycrystal)
+    # args.dt = 2 * 1e-6
+    # ts = np.arange(0., args.dt*1201, args.dt)
+
+    args.dt = 2 * 1e-7
+    ts = np.arange(0., args.dt*12001, args.dt)
+
+    # ts = np.arange(0., args.dt*101, args.dt)
+
+    # ys, T, polycrystal = simulate_gn(ts)
+    # show_3d_scatters(ys[-1, :, :], T, polycrystal)
  
-    # save_animation(ys[::20], polycrystal)
+    simulate_fd(ts)
 
 
 def show_3d_scatters(y, T, polycrystal):
@@ -448,7 +515,7 @@ def show_3d_scatters(y, T, polycrystal):
 
 
 if __name__ == "__main__":
-    # exp()
+    exp()
     # plt.show()
     # show_3d_scatters()
-    finite_difference()
+    # finite_difference()
