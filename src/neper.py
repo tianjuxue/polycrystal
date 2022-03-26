@@ -6,10 +6,13 @@ from src.arguments import args
 def generate_tess():
     # os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube(1,1,0.3)" -ori "file(data/neper/input.ori)" -o data/neper/domain -format tess,ori')
     os.system(f'neper -T -n {args.num_grains} -id 1 -regularization 0 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
-                -o data/neper/domain -format tess')
+                -o data/neper/domain -format tess,obj')
 
 
 def visualize(): 
+    '''
+    If Paraview works, this function should be deprecated
+    '''
     # os.system(f'neper -V data/neper/domain.tess -datacellcol ori:"file(data/neper/input.ori)" -datacellcolscheme "ipf(z)" -datacelltrs 0 -print data/neper/img')
     os.system(f'neper -V data/neper/domain.tess -datacellcol id -datacelltrs 0.5 -print data/neper/img')
 
@@ -18,7 +21,7 @@ def post_processing():
     os.system(f'neper -T -loadtess data/neper/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
 
 
-def exp():
+def domain():
     generate_tess()
     post_processing()
     # visualize()
@@ -27,13 +30,13 @@ def exp():
 def simple():
     os.system(f'neper -T -n 20 -reg 0 -o data/neper/debug/simple -format tess')
     os.system(f'neper -T -loadtess data/neper/debug/simple.tess -statcell facelist,npolylist -statface nfaces')
-
-    # os.system(f'neper -M -rcl 2 -elttype hex data/neper/debug/simple.tess')
-
     os.system(f'neper -M -rcl 1 -elttype hex data/neper/domain.tess')
 
 
 def show_part():
+    '''
+    If Paraview works, this function should be deprecated
+    '''
     cut = args.domain_width/2.
 
     # temperature
@@ -61,6 +64,6 @@ def show_part():
 
 
 if __name__ == "__main__":
-    # exp()
-    show_part()
+    domain()
+    # show_part()
     # simple()

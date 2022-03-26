@@ -11,7 +11,7 @@ from collections import namedtuple
 from matplotlib import pyplot as plt
 from src.arguments import args
 from src.plots import save_animation
-from src.utils import unpack_state
+from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu
 
 args.ad_hoc = 0.1
 
@@ -33,10 +33,6 @@ def explicit_euler(state, t_crt, f, *diff_args):
     y_prev, t_prev = state
     h = t_crt - t_prev
     y_crt = y_prev + h * f(y_prev, t_prev, *diff_args)
-
-    # y_crt = np.where(y_crt < 0., 0, y_crt)
-    # y_crt = np.where(y_crt > 1., 1, y_crt)
-
     return (y_crt, t_crt), y_crt
 
 
@@ -55,7 +51,7 @@ def odeint(stepper, compute_T, f, y0, ts, *diff_args):
             if not np.all(np.isfinite(y)):
                 print(f"Found np.inf or np.nan in y - stop the program")             
                 exit()
-        if i % 100 == 0:
+        if i % 20 == 0:
             ys.append(y)
     ys = np.array(ys)
     return ys
@@ -79,12 +75,23 @@ def inspect_T(T):
     print(f"max T = {np.max(T)}")
 
 
-def construct_polycrystal():
+def write_sols(polycrystal, mesh, ys, steps):
+    for step in steps:
+        zeta = ys[step, :, 0]
+        eta = ys[step, :, 1:]
+        cell_ori_inds = onp.argmax(eta, axis=1)
+        oris = onp.take(polycrystal.unique_oris, cell_ori_inds, axis=0)
+        mesh.cell_data['zeta'] = [onp.array(zeta, dtype=onp.float32)]
+        mesh.cell_data['eta'] = [oris]
+        mesh.write(f"data/vtk/sols/{args.case}/u{step}.vtu")
+
+
+def polycrystal_gn():
     args.num_oris = 20
-    unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
-    oris_indics = onp.random.randint(args.num_oris, size=args.num_grains)
-    oris = onp.take(unique_oris, oris_indics, axis=0)
-    onp.savetxt(f'data/neper/input.ori', oris)
+    unique_oris = get_unique_ori_colors()
+    grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
+    cell_ori_inds = grain_oris_inds
+    mesh = obj_to_vtu()
 
     stface = onp.loadtxt(f'data/neper/domain.stface')
     face_centroids = stface[:, :3]
@@ -151,28 +158,27 @@ def construct_polycrystal():
     print(onp.sum(boundary_face_areas, axis=0))
  
     PolyCrystal = namedtuple('PolyCrystal', ['edges', 'face_areas', 'grain_distances', 'centroids', 'volumes', 'unique_oris', 
-                                             'oris_indics', 'boundary_face_areas', 'boundary_face_centroids'])
+                                             'cell_ori_inds', 'boundary_face_areas', 'boundary_face_centroids'])
     polycrystal = PolyCrystal(new_edges, new_face_areas, grain_distances, centroids, volumes, unique_oris, 
-                              oris_indics, boundary_face_areas, boundary_face_centroids)
+                              cell_ori_inds, boundary_face_areas, boundary_face_centroids)
 
     domain_vol = args.domain_length*args.domain_width*args.domain_height
     args.ch_len = (domain_vol / args.num_grains)**(1./3.)
     print(f"ch_len = {args.ch_len}")
 
-    return polycrystal
+    return polycrystal, mesh
 
 
-def finite_difference():
+def polycrystal_fd():
     filepath = f'data/neper/domain.msh'
     mesh = meshio.read(filepath)
-    mesh.write(f'data/vtk/domain.vtk')
     points = mesh.points
     cells =  mesh.cells_dict['hexahedron']
-
     cell_grain_inds = mesh.cell_data['gmsh:physical'][0]
     assert args.num_grains == np.max(cell_grain_inds)
 
     args.num_oris = 10
+    unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
 
@@ -205,17 +211,11 @@ def finite_difference():
     domain_vol = args.domain_length*args.domain_width*args.domain_height
     volumes = domain_vol / (Nx*Ny*Nz) * np.ones(len(cells))
 
- 
-    PolyCrystal = namedtuple('PolyCrystal', ['edges',  'centroids', 'volumes', 'oris_indics'])
-    polycrystal = PolyCrystal(edges, centroids, volumes, cell_ori_inds)
+    PolyCrystal = namedtuple('PolyCrystal', ['edges',  'centroids', 'volumes', 'unique_oris', 'cell_ori_inds'])
+    polycrystal = PolyCrystal(edges, centroids, volumes, unique_oris, cell_ori_inds)
 
     args.ch_len = (domain_vol / len(cells))**(1./3.)
     print(f"ch_len = {args.ch_len}")
-
-
-    print(f"Writing initial mesh...")
-    mesh.cell_data['ori_inds_ini'] = [onp.array(cell_ori_inds, dtype=onp.float32)]
-    # mesh.write(f'data/vtk/sols/u_ini.vtk')
 
     return polycrystal, mesh
 
@@ -239,15 +239,15 @@ def build_graph(polycrystal):
 
     print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
 
-    solid_phases = np.ones(num_nodes)
+    zeta = np.ones(num_nodes)
 
-    grain_orientations = np.zeros((num_nodes, args.num_oris))
-    grain_orientations = grain_orientations.at[np.arange(num_nodes), polycrystal.oris_indics].set(1)
+    eta = np.zeros((num_nodes, args.num_oris))
+    eta = eta.at[np.arange(num_nodes), polycrystal.cell_ori_inds].set(1)
 
     senders = np.array(senders)
     receivers = np.array(receivers)
 
-    state = np.hstack((solid_phases[:, None], grain_orientations))
+    state = np.hstack((zeta[:, None], eta))
 
     # node_features = {'state':state, 
     #                  'centroids': polycrystal.centroids,
@@ -383,9 +383,6 @@ def phase_field(graph):
         # T = np.where(T > args.T_melt, 2000, T)
         # T = np.where(T > 2000, 2000, T)
 
-        # print(T)
-        # exit()
-
         return T[:, None]
 
     def compute_energy(y, t):
@@ -415,8 +412,8 @@ def phase_field(graph):
         # L = 1e8 * np.exp(-Qg/(T*gas_const))
         # rhs = -L * grads / volumes
 
-        # L = 2*1e3 for gn
-        L = 2*1e2
+        # L = 2*1e3 for gn, 2*1e2 for fd
+        L = 2*1e3
 
         rhs = -L * grads
 
@@ -428,94 +425,30 @@ def phase_field(graph):
     return state_rhs, compute_T
 
 
-def simulate_gn(ts):
-    polycrystal = construct_polycrystal()
-    graph, y0 = build_graph(polycrystal)
-    state_rhs, compute_T = phase_field(graph)
-    ys_ = odeint(explicit_euler, compute_T, state_rhs, y0, ts)
-    ys = np.vstack((y0[None, :], ys_))  
-
-    T_final = compute_T(ts[-1])
-    zeta_final = ys[-1, :, 0]
-    eta_final = ys[-1, :, 1:]
-
-    onp.savetxt(f'data/neper/temp', T_final)
-    onp.savetxt(f'data/neper/phase', zeta_final)
-    oris_indics = np.argmax(eta_final, axis=1)
-    oris = onp.take(polycrystal.unique_oris, oris_indics, axis=0)
-    onp.savetxt(f'data/neper/oris', oris)
-
-    return ys, T_final, polycrystal
-
-
-def simulate_fd(ts):
-    polycrystal, mesh = finite_difference()
+def simulate(ts, func):
+    polycrystal, mesh = func()
     graph, y0 = build_graph(polycrystal)
     state_rhs, compute_T = phase_field(graph)
     ys_ = odeint(explicit_euler, compute_T, state_rhs, y0, ts)
     ys = np.vstack((y0[None, :], ys_))
-    zeta_final = ys[-1, :, 0]
-    eta_final = ys[-1, :, 1:]
-
-    oris_indics = np.argmax(eta_final, axis=1)
-    # oris = onp.take(polycrystal.unique_oris, oris_indics, axis=0)
-
-    mesh.cell_data['zeta'] = [onp.array(zeta_final, dtype=onp.float32)]
-    mesh.cell_data['ori_inds_fnl'] = [onp.array(oris_indics, dtype=onp.float32)]
-    mesh.write(f'data/vtk/sols/u_final.vtk')
+    write_sols(polycrystal, mesh, ys, [0, len(ys) - 1])
 
 
 def exp():
-    # args.dt = 2 * 1e-6
-    # ts = np.arange(0., args.dt*1201, args.dt)
+    args.case = 'gn'
+    # args.case = 'fd'
 
-    args.dt = 2 * 1e-7
-    ts = np.arange(0., args.dt*12001, args.dt)
-
-    # ts = np.arange(0., args.dt*101, args.dt)
-
-    # ys, T, polycrystal = simulate_gn(ts)
-    # show_3d_scatters(ys[-1, :, :], T, polycrystal)
- 
-    simulate_fd(ts)
-
-
-def show_3d_scatters(y, T, polycrystal):
-    x1, x2, x3 = polycrystal.centroids.T
- 
-    zeta = y[:, 0]
-    eta = y[:, 1:]
-    oris_indics = np.argmax(eta, axis=1)
-
-    cut = args.domain_width/2.
-
-    x1_show = x1[x2 > cut]
-    x2_show = x2[x2 > cut]
-    x3_show = x3[x2 > cut]
-    T_show = T[x2 > cut]
-    zeta_show = zeta[x2 > cut]
-    oris_indics_show = oris_indics[x2 > cut]
-    
-    fig = plt.figure(figsize=(8, 6))
-    ax = plt.axes(projection="3d")
-    p = ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=T_show, alpha=1, vmin=280, vmax=args.T_melt)
-    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
-    cbar = fig.colorbar(p)
-
-    fig = plt.figure(figsize=(8, 6))
-    ax = plt.axes(projection="3d")
-    p = ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=zeta_show, alpha=1, vmin=0, vmax=1)
-    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
-    cbar = fig.colorbar(p)
-
-    fig = plt.figure(figsize=(8, 6))
-    ax = plt.axes(projection="3d")
-    ax.scatter3D(x1_show, x2_show, x3_show, s=2, c=oris_indics_show, alpha=1)
-    ax.set_box_aspect((np.ptp(x1_show), np.ptp(x2_show), np.ptp(x3_show)))
+    if args.case == 'gn':
+        args.dt = 2 * 1e-6
+        ts = np.arange(0., args.dt*1201, args.dt)
+        simulate(ts, polycrystal_gn)
+    else:
+        args.dt = 2 * 1e-7
+        # ts = np.arange(0., args.dt*12001, args.dt)
+        ts = np.arange(0., args.dt*41, args.dt)
+        simulate(ts, polycrystal_fd)
 
 
 if __name__ == "__main__":
     exp()
     # plt.show()
-    # show_3d_scatters()
-    # finite_difference()
