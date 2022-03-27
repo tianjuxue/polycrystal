@@ -33,8 +33,13 @@ parser.add_argument('--power', type=float, help='Unit: W', default=100.)
 parser.add_argument('--r_beam', type=float, help='Unit: mm', default=0.05)
 parser.add_argument('--h_depth', type=float, help='Unit: mm', default=0.1)
 parser.add_argument('--emissivity', type=float, help='Unit:', default=0.2)
-parser.add_argument('--SB_constant', type=float, help='Unit: W/(mm^2*K*4)', default=5.67*1e-14)
-parser.add_argument('--kappa', type=float, help='Unit: W/(mm*K)', default=1.5*1e-2)
+parser.add_argument('--SB_constant', type=float, help='Unit: W/(mm^2*K*4)', default=5.67e-14)
+parser.add_argument('--kappa', type=float, help='Unit: W/(mm*K)', default=1.5e-2)
+parser.add_argument('--gas_const', type=float, help='Unit: J/(Mol*K)', default=8.3)
+parser.add_argument('--Qg', type=float, help='Unit: J/Mol', default=1.4e5)
+parser.add_argument('--L0', type=float, help='Unit: mm^4/(J*s)', default=3.5e12)
+
+
 
 
 args = parser.parse_args()

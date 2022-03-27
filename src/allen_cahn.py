@@ -4,6 +4,7 @@ import jax.numpy as np
 import numpy as onp
 import meshio
 import os
+import glob
 import pickle
 from functools import partial
 from scipy.spatial.transform import Rotation as R
@@ -12,8 +13,6 @@ from matplotlib import pyplot as plt
 from src.arguments import args
 from src.plots import save_animation
 from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu
-
-args.ad_hoc = 0.1
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -76,6 +75,11 @@ def inspect_T(T):
 
 
 def write_sols(polycrystal, mesh, ys, steps):
+    files = glob.glob(f"data/vtk/sols/{args.case}/*")
+    for f in files:
+        os.remove(f)
+
+    print(f"Write sols to file...")
     for step in steps:
         zeta = ys[step, :, 0]
         eta = ys[step, :, 1:]
@@ -295,8 +299,10 @@ def update_graph():
 
         coeff_zeta = 2.77*1e-9
         grad_energy_zeta = coeff_zeta * 0.5 * np.sum((sender_zeta - receiver_zeta)**2) / args.ch_len**2
+
         coeff_eta = 2.77*1e-9
         grad_energy_eta = coeff_eta * 0.5 *np.sum((sender_eta - receiver_eta)**2) / args.ch_len**2
+
         grad_energy = grad_energy_zeta + grad_energy_eta
 
         grad_energy = grad_energy * args.ad_hoc
@@ -345,7 +351,6 @@ def update_graph():
         grain_energy = m_grain * (grain_energy_1 +  graph_energy_2 + graph_energy_3)
 
         local_energy = phase_energy + grain_energy
-
         local_energy = local_energy / args.ad_hoc
 
         return {'local_energy': local_energy}
@@ -378,10 +383,19 @@ def phase_field(graph):
         Y = centroids[:, 1] - 0.5*args.domain_width
         Z = centroids[:, 2] - args.domain_height
         R = np.sqrt(X**2 + Y**2 + Z**2)
-        T = T_ambiant + Q / (2 * np.pi * kappa) / R * np.exp(-vel / (2*alpha) * (R + X))
 
-        # T = np.where(T > args.T_melt, 2000, T)
-        # T = np.where(T > 2000, 2000, T)
+        # tau = 0.00069
+        # tau = 0.0001
+        # factor =  np.exp(-tau/t)
+        # beta = 0.002
+        # factor = np.where(t < beta, t/beta, 1.)
+        factor = 1.
+        eps = 0. 
+        T = T_ambiant + Q / (2 * np.pi * kappa) / (R + eps) * np.exp(-vel / (2*alpha) * (R + X)) * factor
+
+        # print(f"t = {t}, factor = {factor}, T = {np.max(T)}")
+ 
+        T = np.where(T > 2000, 2000, T)
 
         return T[:, None]
 
@@ -391,35 +405,27 @@ def phase_field(graph):
         graph.nodes['state'] = y
         graph.nodes['T'] = T
         new_graph = net_fn(graph)
-        return new_graph.globals['total_energy'][0], T
-
+        # return new_graph.globals['total_energy'][0], T
+        return new_graph.edges['grad_energy'] + new_graph.nodes['local_energy'], T
+ 
     grad_energy = jax.grad(lambda y, t: compute_energy(y, t)[0])
 
     def state_rhs(y, t, *diff_args):
         _, T = compute_energy(y, t)
         grads = grad_energy(y, t)
 
-        gas_const = 8.3
- 
         # Yan's paper
         # Qg = 1.4*1e5
-        # L = 3.5e12 * np.exp(-Qg/(T*gas_const))
+        L = args.L0 * np.exp(-args.Qg/(T*args.gas_const))
 
         # Qg = 2.5*1e5
         # L = 6e15 * np.exp(-Qg/(T*gas_const))
 
-        # Qg = 1.4*1e5
-        # L = 1e8 * np.exp(-Qg/(T*gas_const))
-        # rhs = -L * grads / volumes
-
         # L = 2*1e3 for gn, 2*1e2 for fd
-        L = 2*1e3
+        # L = 2*1e3
 
         rhs = -L * grads
 
-        # all_var = np.hstack((T, rhs * args.dt))
-        # print(all_var[:100, :5])
- 
         return rhs
 
     return state_rhs, compute_T
@@ -432,15 +438,19 @@ def simulate(ts, func):
     ys_ = odeint(explicit_euler, compute_T, state_rhs, y0, ts)
     ys = np.vstack((y0[None, :], ys_))
     write_sols(polycrystal, mesh, ys, [0, len(ys) - 1])
+    # write_sols(polycrystal, mesh, ys, np.arange(len(ys)))
 
 
 def exp():
+    # args.ad_hoc = 0.1
+    args.ad_hoc = 1.
+
     args.case = 'gn'
     # args.case = 'fd'
 
     if args.case == 'gn':
-        args.dt = 2 * 1e-6
-        ts = np.arange(0., args.dt*1201, args.dt)
+        args.dt = 2 * 1e-7
+        ts = np.arange(0., args.dt*12001, args.dt)
         simulate(ts, polycrystal_gn)
     else:
         args.dt = 2 * 1e-7
@@ -452,3 +462,4 @@ def exp():
 if __name__ == "__main__":
     exp()
     # plt.show()
+    # debug()
