@@ -50,7 +50,7 @@ def odeint(stepper, compute_T, f, y0, ts, *diff_args):
             if not np.all(np.isfinite(y)):
                 print(f"Found np.inf or np.nan in y - stop the program")             
                 exit()
-        if i % 20 == 0:
+        if i % 600 == 0:
             ys.append(y)
     ys = np.array(ys)
     return ys
@@ -181,7 +181,7 @@ def polycrystal_fd():
     cell_grain_inds = mesh.cell_data['gmsh:physical'][0]
     assert args.num_grains == np.max(cell_grain_inds)
 
-    args.num_oris = 10
+    args.num_oris = 20
     unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
@@ -414,15 +414,7 @@ def phase_field(graph):
         _, T = compute_energy(y, t)
         grads = grad_energy(y, t)
 
-        # Yan's paper
-        # Qg = 1.4*1e5
         L = args.L0 * np.exp(-args.Qg/(T*args.gas_const))
-
-        # Qg = 2.5*1e5
-        # L = 6e15 * np.exp(-Qg/(T*gas_const))
-
-        # L = 2*1e3 for gn, 2*1e2 for fd
-        # L = 2*1e3
 
         rhs = -L * grads
 
@@ -443,7 +435,7 @@ def simulate(ts, func):
 
 def exp():
     # args.ad_hoc = 0.1
-    args.ad_hoc = 1.
+    args.ad_hoc = 0.2
 
     args.case = 'gn'
     # args.case = 'fd'
@@ -454,8 +446,8 @@ def exp():
         simulate(ts, polycrystal_gn)
     else:
         args.dt = 2 * 1e-7
-        # ts = np.arange(0., args.dt*12001, args.dt)
-        ts = np.arange(0., args.dt*41, args.dt)
+        ts = np.arange(0., args.dt*12001, args.dt)
+        # ts = np.arange(0., args.dt*41, args.dt)
         simulate(ts, polycrystal_fd)
 
 

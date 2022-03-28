@@ -76,11 +76,17 @@ def obj_to_vtu():
 
 
 def vtk_convert_from_server():
-    filepath = f'data/vtk/sols/u_final.vtk'
-    mesh = meshio.read(filepath)
-    mesh.write(filepath)
+    args.case = 'fd'
+    def vtk_convert_from_server_helper(number):
+        filepath = f'data/vtk/sols/{args.case}/u{number}.vtu'
+        mesh = meshio.read(filepath)
+        mesh.write(filepath)
+
+    vtk_convert_from_server_helper(0)
+    vtk_convert_from_server_helper(120)
 
 
 if __name__ == "__main__":
-    get_unique_ori_colors()
-    plt.show()
+    vtk_convert_from_server()
+    # get_unique_ori_colors()
+    # plt.show()
