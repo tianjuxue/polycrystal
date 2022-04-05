@@ -5,6 +5,7 @@ import jax.numpy as np
 import numpy as onp
 import orix
 import time
+import os
 import matplotlib.pyplot as plt
 from orix import plot, sampling
 from orix.crystal_map import Phase
@@ -21,7 +22,6 @@ def unpack_state(state):
 
 
 def get_unique_ori_colors():
-    print(f"Debug info: args.num_oris = {args.num_oris}")
     # unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
     ori2 = Orientation.random(args.num_oris)
     ipfkey = plot.IPFColorKeyTSL(symmetry.Oh)
@@ -48,6 +48,14 @@ def get_unique_ori_colors():
 #     rgb_z = ipfkey.orientation2color(ori2)
 #     ori2.scatter("ipf", c=rgb_z, direction=ipfkey.direction)
 
+
+def make_video():
+    # The command -pix_fmt yuv420p is to ensure preview of video on Mac OS is enabled
+    # https://apple.stackexchange.com/questions/166553/why-wont-video-from-ffmpeg-show-in-quicktime-imovie-or-quick-preview
+    # The command -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" is to solve the following "not-divisible-by-2" problem
+    # https://stackoverflow.com/questions/20847674/ffmpeg-libx264-height-not-divisible-by-2
+    # -y means always overwrite
+    os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" data/mp4/test1.mp4')
 
 
 def obj_to_vtu():
@@ -108,17 +116,16 @@ def compute_stats():
         # melt = onp.load(f"data/numpy/{case}/melt_{tick}.npy")
         # num_nodes = len(volumes)
 
-
-        edges = onp.load(f"data/numpy/fd/edges.npy")
-        volumes = onp.load(f"data/numpy/fd/vols.npy")
-        centroids = onp.load(f"data/numpy/fd/centroids.npy")
+        edges = onp.load(f"data/numpy/fd/info/edges.npy")
+        volumes = onp.load(f"data/numpy/fd/info/vols.npy")
+        centroids = onp.load(f"data/numpy/fd/info/centroids.npy")
 
         if case == 'fd':
-            cell_ori_inds =onp.load(f"data/numpy/{case}/cell_ori_inds_{tick}.npy")
-            melt = onp.load(f"data/numpy/{case}/melt_{tick}.npy")           
+            cell_ori_inds =onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
+            melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")           
         else:
-            grain_oris_inds = onp.load(f"data/numpy/{case}/cell_ori_inds_{tick}.npy")
-            grain_melt = onp.load(f"data/numpy/{case}/melt_{tick}.npy")
+            grain_oris_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
+            grain_melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")
             cell_grain_inds = onp.load(f"data/numpy/fd/cell_grain_inds.npy")
             cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
             melt = onp.take(grain_melt, cell_grain_inds - 1, axis=0)
@@ -162,28 +169,10 @@ def compute_stats():
             vols = onp.array([volumes[g] for g in grain])
 
             # weighted_directions = weighted_directions - onp.mean(weighted_directions, axis=0)[None, :]
-
-            pca.fit(weighted_directions)
-
             components = pca.components_
             ev = pca.explained_variance_
             lengths = onp.sqrt(ev)
-
             aspect_ratio = 2*lengths[0]/(lengths[1] + lengths[2])
-
-            # if aspect_ratio > 20:
-            #     print(f"\npca.components_ = \n{pca.components_}")
-            #     print(f"\npca.explained_variance_ = {pca.explained_variance_}")
-            #     print(f"\nsum of ev = {onp.sum(pca.explained_variance_)}")
-            #     print(f"\npca.explained_variance_ratio_ = {pca.explained_variance_ratio_}")
-
-            #     print(f"\naspect_ratio = {aspect_ratio}")
-            #     print(f"\nlen(grain) = {len(grain)}")
-            #     print(f"\ndirections = \n{directions}")
-            #     print(f"\nweighted_directions = \n{weighted_directions}")
-            #     print(f"\nvols = {vols}") 
-            #     exit()
-
             return aspect_ratio, vol
 
         pca = PCA(n_components=3)
@@ -194,37 +183,33 @@ def compute_stats():
             grains_oris = grains[i] 
             for j in range(len(grains_oris)):
                 grain = grains_oris[j]
-                # vol = 0.
-                # for g in grain:
-                #     vol += volumes[g]
                 aspect_ratio, vol = compute_aspect_ratios(grain)
                 aspect_ratios.append(aspect_ratio)
                 grain_vols.append(vol)
 
         grain_vols = onp.array(grain_vols)
         aspect_ratios = onp.array(aspect_ratios)
-        onp.save(f"data/numpy/{case}/post_vols_{tick}.npy", grain_vols)
-        onp.save(f"data/numpy/{case}/post_aspect_ratios_{tick}.npy", aspect_ratios)
+        onp.save(f"data/numpy/{case}/post-processing/post_vols_{step:03d}.npy", grain_vols)
+        onp.save(f"data/numpy/{case}/post-processing/post_aspect_ratios_{step:03d}.npy", aspect_ratios)
 
 
     # cases = ['gn', 'fd']
     # ticks = ['ini', 'fnl']
 
-    cases = ['gn', 'fd']
-    ticks = ['fnl']
+    cases = ['fd']
+    steps = [0, 20]
     for case in cases:
-        for tick in ticks:
+        for step in steps:
             compute_stats_helper()
 
 def hist_plot():
+    step = 20
     # fd_vols_ini = onp.load(f"data/numpy/fd/post_vols_ini.npy")
     # gn_vols_ini = onp.load(f"data/numpy/gn/post_vols_ini.npy")
-    fd_vols_fnl = onp.load(f"data/numpy/fd/post_vols_fnl.npy")
-    gn_vols_fnl = onp.load(f"data/numpy/gn/post_vols_fnl.npy")
-
-
-    fd_aspect_ratios_fnl = onp.load(f"data/numpy/fd/post_aspect_ratios_fnl.npy")
-    gn_aspect_ratios_fnl = onp.load(f"data/numpy/gn/post_aspect_ratios_fnl.npy")
+    fd_vols_fnl = onp.load(f"data/numpy/fd/post-processing/post_vols_{step:03d}.npy")
+    gn_vols_fnl = onp.load(f"data/numpy/gn/post-processing/post_vols_{step:03d}.npy")
+    fd_aspect_ratios_fnl = onp.load(f"data/numpy/fd/post-processing/post_aspect_ratios_{step:03d}.npy")
+    gn_aspect_ratios_fnl = onp.load(f"data/numpy/gn/post-processing/post_aspect_ratios_{step:03d}.npy")
 
 
     fig = plt.figure()
@@ -261,14 +246,13 @@ def hist_plot():
 
     # plt.hist([fd_aspect_ratios_fnl[fd_vols_fnl > val], gn_aspect_ratios_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
 
-
     plt.legend()
 
 
 if __name__ == "__main__":
     # vtk_convert_from_server()
     # get_unique_ori_colors()
-    # compute_stats()
-    hist_plot()
-    plt.show()
-
+    compute_stats()
+    # hist_plot()
+    # plt.show()
+    # make_video()

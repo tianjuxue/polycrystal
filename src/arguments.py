@@ -38,8 +38,11 @@ parser.add_argument('--kappa', type=float, help='Unit: W/(mm*K)', default=1.5e-2
 parser.add_argument('--gas_const', type=float, help='Unit: J/(Mol*K)', default=8.3)
 parser.add_argument('--Qg', type=float, help='Unit: J/Mol', default=1.4e5)
 parser.add_argument('--L0', type=float, help='Unit: mm^4/(J*s)', default=3.5e12)
-
-
+parser.add_argument('--kappa_p', type=float, help='Unit: J/mm', default=2.77e-9)
+parser.add_argument('--kappa_g', type=float, help='Unit: J/mm', default=3.7e-9)
+parser.add_argument('--m_p', type=float, help='Unit: J/mm^3', default=1.2e-4)
+parser.add_argument('--m_g', type=float, help='Unit: J/mm^3', default=2.4e-4)
+parser.add_argument('--ad_hoc', type=float, help='Unit: None', default=0.6)
 
 
 args = parser.parse_args()
