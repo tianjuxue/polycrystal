@@ -37,8 +37,6 @@ def explicit_euler(state, t_crt, f, *diff_args):
 
 def odeint(polycrystal, mesh, compute_T, stepper, f, y0, ts, *diff_args):
     clean_sols()
-    # ys = []
-    # aux = []
     state = (y0, ts[0])
     melt = np.zeros(len(y0), dtype=bool)
     write_sols(polycrystal, mesh, y0, melt, 0)
@@ -59,12 +57,6 @@ def odeint(polycrystal, mesh, compute_T, stepper, f, y0, ts, *diff_args):
 
     write_info(polycrystal)
 
-            # ys.append(y)
-            # aux.append(melt)
-    # ys = np.array(ys)
-    # aux = np.array(aux)
-
-    # return ys, aux
 
 def inspect_y(y, y0):
     zeta = y[:, 0]
@@ -113,7 +105,6 @@ def write_sols(polycrystal, mesh, y, aux, step):
 
 
 def polycrystal_gn():
-    args.num_oris = 20
     unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = grain_oris_inds
@@ -178,10 +169,6 @@ def polycrystal_gn():
     centroids_1 = onp.take(centroids, new_edges[:, 0], axis=0)
     centroids_2 = onp.take(centroids, new_edges[:, 1], axis=0)
     grain_distances = onp.sqrt(onp.sum((centroids_1 - centroids_2)**2, axis=1))
-
-    # print(new_edges.shape)
-    # print(new_edges[:10])
-    # print(onp.sum(boundary_face_areas, axis=0))
  
     ch_len = new_face_areas / grain_distances
 
@@ -205,7 +192,6 @@ def polycrystal_fd():
     onp.save(f"data/numpy/fd/info/cell_grain_inds.npy", cell_grain_inds)
     assert args.num_grains == np.max(cell_grain_inds)
 
-    args.num_oris = 20
     unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
@@ -379,7 +365,6 @@ def simulate(ts, func):
     odeint(polycrystal, mesh, compute_T, explicit_euler, state_rhs, y0, ts)
    
 
-
 def run():
     args.case = 'gn'
     # args.case = 'fd'
@@ -398,5 +383,4 @@ def run():
 
 if __name__ == "__main__":
     run()
-    # plt.show()
-    # debug()
+

@@ -55,7 +55,7 @@ def make_video():
     # The command -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" is to solve the following "not-divisible-by-2" problem
     # https://stackoverflow.com/questions/20847674/ffmpeg-libx264-height-not-divisible-by-2
     # -y means always overwrite
-    os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" data/mp4/test1.mp4')
+    os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" data/mp4/test.mp4')
 
 
 def obj_to_vtu():
@@ -126,7 +126,7 @@ def compute_stats():
         else:
             grain_oris_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
             grain_melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")
-            cell_grain_inds = onp.load(f"data/numpy/fd/cell_grain_inds.npy")
+            cell_grain_inds = onp.load(f"data/numpy/fd/info/cell_grain_inds.npy")
             cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
             melt = onp.take(grain_melt, cell_grain_inds - 1, axis=0)
 
@@ -169,6 +169,7 @@ def compute_stats():
             vols = onp.array([volumes[g] for g in grain])
 
             # weighted_directions = weighted_directions - onp.mean(weighted_directions, axis=0)[None, :]
+            pca.fit(weighted_directions)
             components = pca.components_
             ev = pca.explained_variance_
             lengths = onp.sqrt(ev)
@@ -196,7 +197,7 @@ def compute_stats():
     # cases = ['gn', 'fd']
     # ticks = ['ini', 'fnl']
 
-    cases = ['fd']
+    cases = ['gn', 'fd']
     steps = [0, 20]
     for case in cases:
         for step in steps:
@@ -211,14 +212,17 @@ def hist_plot():
     fd_aspect_ratios_fnl = onp.load(f"data/numpy/fd/post-processing/post_aspect_ratios_{step:03d}.npy")
     gn_aspect_ratios_fnl = onp.load(f"data/numpy/gn/post-processing/post_aspect_ratios_{step:03d}.npy")
 
-
-    fig = plt.figure()
-
     # print(onp.mean()
     # print(onp.mean(gn_vols_fnl[gn_vols_fnl > 1e-7]))
 
-
     # val = onp.min(gn_vols_fnl)
+    # val = 1e-7
+
+    fd_volumes = onp.load(f"data/numpy/fd/info/vols.npy")
+    domain_vol = args.domain_length*args.domain_width*args.domain_height
+    cell_vol = domain_vol / len(fd_volumes)
+    print(f"fd cell_vol = {cell_vol}")
+
     val = 1e-7
 
     # print(fd_vols_fnl[fd_vols_fnl < val])
@@ -232,19 +236,17 @@ def hist_plot():
 
     print(onp.mean(fd_aspect_ratios_fnl[fd_vols_fnl > val]))
     print(onp.mean(gn_aspect_ratios_fnl[gn_vols_fnl > val]))
-
-    # exit()
  
-
-    # colors = ['blue', 'red', 'orange', 'green']
-    # labels = ['fd_ini', 'gn_ini', 'fd_fnl', 'gn_fnl']
-    # plt.hist([fd_vols_ini, gn_vols_ini, fd_vols_fnl, gn_vols_fnl], color=colors, bins=bins, label=labels)
+ 
 
     colors = ['blue', 'red']
     labels = ['fd_fnl', 'gn_fnl']
-    plt.hist([fd_vols_fnl[fd_vols_fnl > val], gn_vols_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(0., 1e-5, 6), label=labels)
 
-    # plt.hist([fd_aspect_ratios_fnl[fd_vols_fnl > val], gn_aspect_ratios_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
+    fig = plt.figure()
+    plt.hist([fd_vols_fnl[fd_vols_fnl > val], gn_vols_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(0., 1e-5, 6), label=labels)
+    
+    fig = plt.figure()
+    plt.hist([fd_aspect_ratios_fnl[fd_vols_fnl > val], gn_aspect_ratios_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
 
     plt.legend()
 
@@ -252,7 +254,7 @@ def hist_plot():
 if __name__ == "__main__":
     # vtk_convert_from_server()
     # get_unique_ori_colors()
-    compute_stats()
+    make_video()
+    # compute_stats()
     # hist_plot()
-    # plt.show()
-    # make_video()
+    plt.show()
