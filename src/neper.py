@@ -6,13 +6,13 @@ from src.arguments import args
 def domain():
     # os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube(1,1,0.3)" -ori "file(data/neper/input.ori)" -o data/neper/domain -format tess,ori')
     os.system(f'neper -T -n {args.num_grains} -id 1 -regularization 0 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
-                -o data/neper/domain -format tess,obj')
+                -o data/neper/domain -format tess,obj,ori')
     os.system(f'neper -T -loadtess data/neper/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
     os.system(f'neper -M -rcl 1 -elttype hex -faset faces data/neper/domain.tess')
  
 
 def simple():
-    os.system(f'neper -T -n 20 -reg 0 -o data/neper/debug/simple -format tess')
+    os.system(f'neper -T -n 20 -reg 0 -o data/neper/debug/simple -format tess,ori')
     os.system(f'neper -T -loadtess data/neper/debug/simple.tess -statcell facelist,npolylist -statface nfaces')
     os.system(f'neper -M data/neper/debug/simple.tess -rcl 1 -elttype hex')
  

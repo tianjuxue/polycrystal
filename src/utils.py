@@ -16,18 +16,25 @@ from sklearn.decomposition import PCA
 
 
 def unpack_state(state):
-    zeta = state[...,  0:1]
-    eta = state[..., 1:]
-    return zeta, eta
+    T = state[..., 0:1]
+    zeta = state[...,  1:2]
+    eta = state[..., 2:]
+    return T, zeta, eta
 
 
 def get_unique_ori_colors():
     # unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
     ori2 = Orientation.random(args.num_oris)
-    ipfkey = plot.IPFColorKeyTSL(symmetry.Oh)
+
+    v = Vector3d((0, 1, 0))
+
+    ipfkey = plot.IPFColorKeyTSL(symmetry.Oh, v)
     ori2.symmetry = symmetry.Oh
     rgb_z = ipfkey.orientation2color(ori2)
-    # ori2.scatter("ipf", c=rgb_z, direction=ipfkey.direction)
+    ori2.scatter("ipf", c=rgb_z, direction=ipfkey.direction)
+
+    onp.save(f"data/numpy/quat.npy", ori2.data)
+
     return rgb_z
 
 
@@ -75,12 +82,6 @@ def obj_to_vtu():
             cells_inds[-1].append([int(pt_ind) - 1 for pt_ind in l[1:]])
 
     cells = [('polyhedron', cells_inds)]
-
-    # cell_data = {'u': [onp.ones(len(cells_inds), dtype=onp.float32)]}
-    # cell_data = {'u': [onp.random.rand(len(cells_inds), 3)]}
-    # cell_data = {'u': [onp.hstack((onp.zeros((len(cells_inds), 2)), onp.ones((len(cells_inds), 1))))]}
-    # mesh = meshio.Mesh(points, cells, cell_data=cell_data)
-
     mesh = meshio.Mesh(points, cells)
     return mesh
 
@@ -193,62 +194,64 @@ def compute_stats():
         onp.save(f"data/numpy/{case}/post-processing/post_vols_{step:03d}.npy", grain_vols)
         onp.save(f"data/numpy/{case}/post-processing/post_aspect_ratios_{step:03d}.npy", aspect_ratios)
 
-
-    # cases = ['gn', 'fd']
-    # ticks = ['ini', 'fnl']
-
     cases = ['gn', 'fd']
-    steps = [0, 20]
+    steps = [20]
     for case in cases:
         for step in steps:
             compute_stats_helper()
 
 def hist_plot():
     step = 20
-    # fd_vols_ini = onp.load(f"data/numpy/fd/post_vols_ini.npy")
-    # gn_vols_ini = onp.load(f"data/numpy/gn/post_vols_ini.npy")
-    fd_vols_fnl = onp.load(f"data/numpy/fd/post-processing/post_vols_{step:03d}.npy")
-    gn_vols_fnl = onp.load(f"data/numpy/gn/post-processing/post_vols_{step:03d}.npy")
-    fd_aspect_ratios_fnl = onp.load(f"data/numpy/fd/post-processing/post_aspect_ratios_{step:03d}.npy")
-    gn_aspect_ratios_fnl = onp.load(f"data/numpy/gn/post-processing/post_aspect_ratios_{step:03d}.npy")
+
+    fd_vols = onp.load(f"data/numpy/fd/post-processing/post_vols_{step:03d}.npy")
+    gn_vols = onp.load(f"data/numpy/gn/post-processing/post_vols_{step:03d}.npy")
+    fd_aspect_ratios = onp.load(f"data/numpy/fd/post-processing/post_aspect_ratios_{step:03d}.npy")
+    gn_aspect_ratios = onp.load(f"data/numpy/gn/post-processing/post_aspect_ratios_{step:03d}.npy")
 
     # print(onp.mean()
-    # print(onp.mean(gn_vols_fnl[gn_vols_fnl > 1e-7]))
-
-    # val = onp.min(gn_vols_fnl)
+    # print(onp.mean(gn_vols[gn_vols > 1e-7]))
+    # val = onp.min(gn_vols)
     # val = 1e-7
 
     fd_volumes = onp.load(f"data/numpy/fd/info/vols.npy")
     domain_vol = args.domain_length*args.domain_width*args.domain_height
-    cell_vol = domain_vol / len(fd_volumes)
-    print(f"fd cell_vol = {cell_vol}")
+    avg_cell_vol = domain_vol / len(fd_volumes)
+    avg_grain_vol = domain_vol / args.num_grains
+    print(f"avg fd cell_vol = {avg_cell_vol}")
+    print(f"avg grain vol = {avg_grain_vol}")
 
-    val = 1e-7
+    # val = 1e-7
+    val = 1e-6
 
-    # print(fd_vols_fnl[fd_vols_fnl < val])
-    # print(gn_vols_fnl[gn_vols_fnl < val])
-    print(onp.mean(fd_vols_fnl[fd_vols_fnl > val]))
-    print(onp.mean(gn_vols_fnl[gn_vols_fnl > val]))
-    print(onp.sum(fd_vols_fnl > val))
-    print(onp.sum(gn_vols_fnl > val))
-
-    print("\naspect ratios")
-
-    print(onp.mean(fd_aspect_ratios_fnl[fd_vols_fnl > val]))
-    print(onp.mean(gn_aspect_ratios_fnl[gn_vols_fnl > val]))
- 
- 
-
-    colors = ['blue', 'red']
-    labels = ['fd_fnl', 'gn_fnl']
-
-    fig = plt.figure()
-    plt.hist([fd_vols_fnl[fd_vols_fnl > val], gn_vols_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(0., 1e-5, 6), label=labels)
+    # print(fd_vols[fd_vols < val])
+    # print(gn_vols[gn_vols < val])
+    print("\n")
+    print(f"fd mean vol = {onp.mean(fd_vols[fd_vols > val])}")
+    print(f"gn mean vol = {onp.mean(gn_vols[gn_vols > val])}")
+    print(f"fd num of grains = {onp.sum(fd_vols > val)}")
+    print(f"gn num of grains = {onp.sum(gn_vols > val)}")
     
-    fig = plt.figure()
-    plt.hist([fd_aspect_ratios_fnl[fd_vols_fnl > val], gn_aspect_ratios_fnl[gn_vols_fnl > val]], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
+    print("\n")
+    print(f"fd mean aspect_ratio = {onp.mean(fd_aspect_ratios[fd_vols > val])}")
+    print(f"gn mean aspect_ratio = {onp.mean(gn_aspect_ratios[gn_vols > val])}")
+ 
+ 
+    colors = ['blue', 'red']
+    labels = ['DNS', 'ROM']
 
-    plt.legend()
+    fig = plt.figure()
+    plt.hist([fd_vols[fd_vols > val], gn_vols[gn_vols > val]], color=colors, bins=onp.linspace(0., 1e-5, 6), label=labels)
+    plt.legend(fontsize=14, frameon=False) 
+    plt.xlabel(f'Grain volume [mm$^3$]', fontsize=16)
+    plt.ylabel(f'Count', fontsize=16)
+    plt.tick_params(labelsize=14)
+
+    fig = plt.figure()
+    plt.hist([fd_aspect_ratios[fd_vols > val], gn_aspect_ratios[gn_vols > val]], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
+    plt.legend(fontsize=14, frameon=False) 
+    plt.xlabel(f'Aspect ratio', fontsize=16)
+    plt.ylabel(f'Count', fontsize=16)
+    plt.tick_params(labelsize=14)
 
 
 if __name__ == "__main__":
