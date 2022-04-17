@@ -12,46 +12,52 @@ from collections import namedtuple
 from matplotlib import pyplot as plt
 from src.arguments import args
 from src.plots import save_animation
-from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime
+from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime, read_path
+
+
+# TODO: unique_oris should be a class property, not an instance property
+PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris', 'cell_ori_inds', 
+    'boundary_face_areas', 'boundary_face_centroids', 'meta_info'])
 
 
 @partial(jax.jit, static_argnums=(2,))
-def rk4(state, t_crt, f, *diff_args):
+def rk4(state, t_crt, f, *ode_params):
     '''
     Fourth order Runge-Kutta method
     We probably don't need this one.
     '''
     y_prev, t_prev = state
     h = t_crt - t_prev
-    k1 = h * f(y_prev, t_prev, *diff_args)
-    k2 = h * f(y_prev + k1/2., t_prev + h/2., *diff_args)
-    k3 = h * f(y_prev + k2/2., t_prev + h/2., *diff_args)
-    k4 = h * f(y_prev + k3, t_prev + h, *diff_args)
+    k1 = h * f(y_prev, t_prev, *ode_params)
+    k2 = h * f(y_prev + k1/2., t_prev + h/2., *ode_params)
+    k3 = h * f(y_prev + k2/2., t_prev + h/2., *ode_params)
+    k4 = h * f(y_prev + k3, t_prev + h, *ode_params)
     y_crt = y_prev + 1./6 * (k1 + 2 * k2 + 2 * k3 + k4)
     return (y_crt, t_crt), y_crt
 
 
 @partial(jax.jit, static_argnums=(2,))
-def explicit_euler(state, t_crt, f, *diff_args):
+def explicit_euler(state, t_crt, f, *ode_params):
     '''
     Explict Euler method
     '''
     y_prev, t_prev = state
     h = t_crt - t_prev
-    y_crt = y_prev + h * f(y_prev, t_prev, *diff_args)
+    y_crt = y_prev + h * f(y_prev, t_prev, *ode_params)
     return (y_crt, t_crt), y_crt
 
 
-def odeint(polycrystal, mesh, stepper, f, y0, ts, *diff_args):
+def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, ts, xs, ys, ps):
     '''
     ODE integrator. 
     '''
     clean_sols()
     state = (y0, ts[0])
+    # TODO: for multi-layer printing, melt should not be intialized this way
     melt = np.zeros(len(y0), dtype=bool)
     write_sols(polycrystal, mesh, y0, melt, 0)
     for (i, t_crt) in enumerate(ts[1:]):
-        state, y = stepper(state, t_crt, f, *diff_args)
+        state, y = stepper(state, t_crt, f, xs[i + 1], ys[i + 1], ps[i + 1])
         melt = np.logical_or(melt, y[:, 1] < 0.5)
         if (i + 1) % 20 == 0:
             print(f"step {i + 1}")
@@ -59,13 +65,14 @@ def odeint(polycrystal, mesh, stepper, f, y0, ts, *diff_args):
             inspect_sol(y, y0)
             if not np.all(np.isfinite(y)):          
                 raise ValueError(f"Found np.inf or np.nan in y - stop the program")
-        write_sol_interval = 500
+        write_sol_interval = args.write_sol_interval
         if (i + 1) % write_sol_interval == 0:
             write_sols(polycrystal, mesh, y, melt, (i + 1) // write_sol_interval)
 
+    write_final_sols(polycrystal, mesh_bottom_layer, y, melt)
     write_info(polycrystal)
 
-
+ 
 def inspect_sol(y, y0):
     '''
     While running simulations, print out some useful information.
@@ -87,8 +94,19 @@ def clean_sols():
     '''
     Clean the data folder.
     '''
-    files_vtk = glob.glob(f"data/vtk/{args.case}/sols/*")
-    files_numpy = glob.glob(f"data/numpy/{args.case}/sols/*")
+    if args.case == 'fd' or args.case == 'gn':
+        vtk_folder = f"data/vtk/{args.case}/sols"
+        numpy_folder = f"data/numpy/{args.case}/sols"
+    else:
+        vtk_folder = f"data/vtk/{args.case}/sols/layer_{args.layer:03d}"
+        if not os.path.exists(vtk_folder):
+            os.makedirs(vtk_folder)
+        numpy_folder = f'data/numpy/{args.case}/sols/layer_{args.layer:03d}'
+        if not os.path.exists(numpy_folder):
+            os.makedirs(numpy_folder)
+
+    files_vtk = glob.glob(vtk_folder + f"/*")
+    files_numpy = glob.glob(numpy_folder + f"/*")
     files = files_vtk + files_numpy
     for f in files:
         os.remove(f)
@@ -98,19 +116,13 @@ def write_info(polycrystal):
     '''
     Mostly for post-processing. E.g., compute grain volume, aspect ratios, etc.
     '''
-    onp.save(f"data/numpy/{args.case}/info/edges.npy", polycrystal.edges)
-    onp.save(f"data/numpy/{args.case}/info/vols.npy", polycrystal.volumes)
-    onp.save(f"data/numpy/{args.case}/info/centroids.npy", polycrystal.centroids)
+    if args.case == 'fd' or args.case == 'gn':
+        onp.save(f"data/numpy/{args.case}/info/edges.npy", polycrystal.edges)
+        onp.save(f"data/numpy/{args.case}/info/vols.npy", polycrystal.volumes)
+        onp.save(f"data/numpy/{args.case}/info/centroids.npy", polycrystal.centroids)
 
 
-def write_sols(polycrystal, mesh, y, aux, step):
-    '''
-    Use Paraview to open .vtu files for visualization of:
-    1. Temeperature field (T)
-    2. Liquid/Solid phase (zeta)
-    3. Grain orientations (eta)
-    '''
-    print(f"Write sols to file...")
+def write_sols_heper(polycrystal, mesh, y, melt):
     T = y[:, 0]
     zeta = y[:, 1]
     eta = y[:, 2:]
@@ -119,24 +131,49 @@ def write_sols(polycrystal, mesh, y, aux, step):
     mesh.cell_data['T'] = [onp.array(T, dtype=onp.float32)]
     mesh.cell_data['zeta'] = [onp.array(zeta, dtype=onp.float32)]
     mesh.cell_data['eta'] = [oris]
+    mesh.cell_data['melt'] = [onp.array(melt, dtype=onp.float32)]
     cell_ori_inds = onp.array(cell_ori_inds, dtype=onp.int32)
     mesh.cell_data['ori_inds'] = [cell_ori_inds]
-    mesh.write(f"data/vtk/{args.case}/sols/u{step:03d}.vtu")
-    onp.save(f"data/numpy/{args.case}/sols/cell_ori_inds_{step:03d}.npy", cell_ori_inds)
-    onp.save(f"data/numpy/{args.case}/sols/melt_{step:03d}.npy", aux) 
-    # onp.save(f"data/numpy/{args.case}/sols/y_{step:03d}.npy", y)  
+
+    return T, zeta, cell_ori_inds
 
 
-def polycrystal_gn():
+def write_sols(polycrystal, mesh, y, melt, step):
+    '''
+    Use Paraview to open .vtu files for visualization of:
+    1. Temeperature field (T)
+    2. Liquid/Solid phase (zeta)
+    3. Grain orientations (eta)
+    '''
+    print(f"Write sols to file...")
+    T, zeta, cell_ori_inds = write_sols_heper(polycrystal, mesh, y, melt)
+    if args.case == 'fd' or args.case == 'gn':
+        onp.save(f"data/numpy/{args.case}/sols/T_{step:03d}.npy", T)
+        onp.save(f"data/numpy/{args.case}/sols/zeta_{step:03d}.npy", zeta)
+        onp.save(f"data/numpy/{args.case}/sols/cell_ori_inds_{step:03d}.npy", cell_ori_inds)
+        onp.save(f"data/numpy/{args.case}/sols/melt_{step:03d}.npy", melt)
+        mesh.write(f"data/vtk/{args.case}/sols/u{step:03d}.vtu")
+    else:
+        mesh.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/u{step:03d}.vtu")
+
+
+def write_final_sols(polycrystal, mesh_bottom_layer, y, melt):
+    if args.case == 'part':
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/y_final.npy', y[args.layer_num_dofs:, :])
+        write_sols_heper(polycrystal, mesh_bottom_layer, y[:args.layer_num_dofs, :], melt[:args.layer_num_dofs])
+        mesh_bottom_layer.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/sol_layer_{args.layer:03d}.vtu")
+
+
+def polycrystal_gn(domain_name='domain_big'):
     '''
     Prepare graph information for reduced-order modeling
     '''
     unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = grain_oris_inds
-    mesh = obj_to_vtu()
+    mesh = obj_to_vtu(domain_name)
 
-    stface = onp.loadtxt(f'data/neper/domain.stface')
+    stface = onp.loadtxt(f'data/neper/{domain_name}/domain.stface')
     face_centroids = stface[:, :3]
     face_areas = stface[:, 3]
 
@@ -144,8 +181,9 @@ def polycrystal_gn():
     centroids = []
     volumes = []
  
-    file = open(f'data/neper/domain.stcell', 'r')
+    file = open(f'data/neper/{domain_name}/domain.stcell', 'r')
     lines = file.readlines()
+
     assert args.num_grains == len(lines)
  
     boundary_face_areas = onp.zeros((args.num_grains, 6))
@@ -201,29 +239,28 @@ def polycrystal_gn():
     # domain_vol = args.domain_length*args.domain_width*args.domain_height
     # ch_len_avg = (domain_vol / args.num_grains)**(1./3.) * onp.ones(len(new_face_areas))
 
-    PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris', 
-                                             'cell_ori_inds', 'boundary_face_areas', 'boundary_face_centroids'])
+    meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
     polycrystal = PolyCrystal(new_edges, ch_len, centroids, volumes, unique_oris, 
-                              cell_ori_inds, boundary_face_areas, boundary_face_centroids)
+                              cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
 
     return polycrystal, mesh
 
 
-def polycrystal_fd():
+def polycrystal_fd(domain_name='domain_big'):
     '''
     Prepare graph information for finite difference method
     '''
-    filepath = f'data/neper/domain.msh'
+    filepath=f'data/neper/{domain_name}/domain.msh'
     mesh = meshio.read(filepath)
     points = mesh.points
     cells =  mesh.cells_dict['hexahedron']
-    cell_grain_inds = mesh.cell_data['gmsh:physical'][0]
+    cell_grain_inds = mesh.cell_data['gmsh:physical'][0] - 1
     onp.save(f"data/numpy/fd/info/cell_grain_inds.npy", cell_grain_inds)
-    assert args.num_grains == np.max(cell_grain_inds)
+    assert args.num_grains == onp.max(cell_grain_inds) + 1
 
     unique_oris = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
-    cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
+    cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds, axis=0)
 
     Nx = round(args.domain_length / points[1, 0])
     Ny = round(args.domain_width / points[Nx + 1, 1])
@@ -270,15 +307,31 @@ def polycrystal_fd():
 
     boundary_face_areas = onp.transpose(onp.stack(boundary_face_areas))
 
-    PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris', 
-                                             'cell_ori_inds', 'boundary_face_areas', 'boundary_face_centroids'])
+    meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
     polycrystal = PolyCrystal(edges, ch_len, centroids, volumes, unique_oris, 
-                              cell_ori_inds, boundary_face_areas, boundary_face_centroids)
+                              cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
 
     return polycrystal, mesh
 
 
-def build_graph(polycrystal):
+def default_initialization(poly_sim):
+    num_nodes = len(poly_sim.centroids)
+    T = args.T_ambient*np.ones(num_nodes)
+    zeta = np.ones(num_nodes)
+    eta = np.zeros((num_nodes, args.num_oris))
+    eta = eta.at[np.arange(num_nodes), poly_sim.cell_ori_inds].set(1)
+    # shape of state: (num_nodes, 1 + 1 + args.num_oris)
+    y0 = np.hstack((T[:, None], zeta[:, None], eta))
+    return y0
+
+
+def layered_initialization(poly_top_layer):
+    y_top = default_initialization(poly_top_layer)
+    y_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/y_final.npy')
+    return np.vstack((y_down, y_top))
+
+
+def build_graph(polycrystal, y0):
     '''
     Initialize graph using JAX library Jraph
     https://github.com/deepmind/jraph
@@ -289,18 +342,12 @@ def build_graph(polycrystal):
     receivers = polycrystal.edges[:, 1]
     n_node = np.array([num_nodes])
     n_edge = np.array([len(senders)])
-
-    print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
-    T = args.T_ambient*np.ones(num_nodes)
-    zeta = np.ones(num_nodes)
-    eta = np.zeros((num_nodes, args.num_oris))
-    eta = eta.at[np.arange(num_nodes), polycrystal.cell_ori_inds].set(1)
     senders = np.array(senders)
     receivers = np.array(receivers)
-    # shape of state: (num_nodes, 1 + 1 + args.num_oris)
-    state = np.hstack((T[:, None], zeta[:, None], eta))
 
-    node_features = {'state':state, 
+    print(f"Total number nodes = {n_node[0]}, total number of edges = {n_edge[0]}")
+
+    node_features = {'state':y0, 
                      'centroids': polycrystal.centroids,
                      'volumes': polycrystal.volumes[:, None],
                      'boundary_face_areas': polycrystal.boundary_face_areas, 
@@ -311,7 +358,7 @@ def build_graph(polycrystal):
     graph = jraph.GraphsTuple(nodes=node_features, edges=edge_features, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals={})
 
-    return graph, state
+    return graph
 
 
 def update_graph():
@@ -376,7 +423,7 @@ def phase_field(graph):
     volumes = graph.nodes['volumes']
     centroids = graph.nodes['centroids']
 
-    def heat_source(y, t):
+    def heat_source(y, t, *ode_params):
         '''
         Using a boundary heat source with following reference:
         Lian, Yanping, et al. "A cellular automaton finite volume method for microstructure evolution during 
@@ -384,53 +431,51 @@ def phase_field(graph):
         The heat source only acts on the top surface.
         Also, convection and radiation are considered, which act on all surfaces.
         '''
+        power_x, power_y, power_on = ode_params
         T, zeta, eta = unpack_state(y)
         boundary_face_areas = graph.nodes['boundary_face_areas']
         boundary_face_centroids = graph.nodes['boundary_face_centroids']
-        upper_face_centroids = boundary_face_centroids[:, -1, :]
-        upper_face_areas = boundary_face_areas[:, -1]
 
         q_convection = np.sum(args.h_conv*(args.T_ambient - T)*boundary_face_areas, axis=1)
         q_radiation = np.sum(args.emissivity*args.SB_constant*(args.T_ambient**4 - T**4)*boundary_face_areas, axis=1)
 
-        x0 = 0.2*args.domain_length
-        total_scanning_time = 1.2e-3
-        vel = 0.6*args.domain_length/total_scanning_time
-        X = upper_face_centroids[:, 0] - x0 - vel * t
-        Y = upper_face_centroids[:, 1] - 0.5*args.domain_width
-        Z = upper_face_centroids[:, 2] - args.domain_height
-        q_laser = 2*args.power*args.power_fraction/(np.pi * args.r_beam**2) * np.exp(-2*(X**2 + Y**2 + Z**2)/args.r_beam**2) * upper_face_areas
-        factor = np.where(t > total_scanning_time, 0., 1.)
-        q_laser = q_laser * factor
+        # 0: left surface, 1: right surface, 2: front surface, 3: back surface, 4: bottom surface, 5: top surface
+        upper_face_centroids = boundary_face_centroids[:, 5, :]
+        upper_face_areas = boundary_face_areas[:, 5]
+
+        X = upper_face_centroids[:, 0] - power_x
+        Y = upper_face_centroids[:, 1] - power_y
+        q_laser = 2*args.power*args.power_fraction/(np.pi * args.r_beam**2) * np.exp(-2*(X**2 + Y**2)/args.r_beam**2) * upper_face_areas
+        q_laser = q_laser * power_on
 
         q = q_convection + q_radiation + q_laser
 
         return q[:, None]
 
-    def compute_energy(y, t):
+    def compute_energy(y, t, *ode_params):
         '''
         When you call net_fn, you are asking Jraph to compute the total free energy (grad energy + local energy) for you.
         '''
-        q = heat_source(y, t)
+        q = heat_source(y, t, *ode_params)
         graph.nodes['state'] = y
         new_graph = net_fn(graph)
         return new_graph.edges['grad_energy'], new_graph.nodes['local_energy'], q
 
-    grad_energy_der_fn = jax.grad(lambda y, t: compute_energy(y, t)[0])
-    local_energy_der_fn = jax.grad(lambda y, t: compute_energy(y, t)[1])
+    grad_energy_der_fn = jax.grad(lambda y, t, *ode_params: compute_energy(y, t, *ode_params)[0])
+    local_energy_der_fn = jax.grad(lambda y, t, *ode_params: compute_energy(y, t, *ode_params)[1])
 
-    def state_rhs(y, t, *diff_args):
+    def state_rhs(y, t, *ode_params):
         '''
         Define the right-hand-side function for the ODE system
         '''
-        _, _, q = compute_energy(y, t)
+        _, _, q = compute_energy(y, t, *ode_params)
         T, zeta, eta = unpack_state(y)
 
         # ad-hoc: If T is too large, L would be too large - solution diverges
         T = np.where(T > 2000., 2000., T)
 
-        der_grad = grad_energy_der_fn(y, t)
-        der_local = local_energy_der_fn(y, t)
+        der_grad = grad_energy_der_fn(y, t, *ode_params)
+        der_local = local_energy_der_fn(y, t, *ode_params)
         L = args.L0 * np.exp(-args.Qg / (T*args.gas_const))
         rhs_phase_field = -L * (der_grad[:, 1:]/volumes + der_local[:, 1:])
         rhs_T = (-der_grad[:, 0:1] + q)/volumes/(args.rho * args.c_h)
@@ -442,30 +487,18 @@ def phase_field(graph):
 
 
 @walltime
-def simulate(ts, func):
+def simulate(ts, xs, ys, ps, func):
     polycrystal, mesh = func()
-    graph, y0 = build_graph(polycrystal)
-    aux0 = np.zeros(len(y0), dtype=bool)
+    y0 = default_initialization(polycrystal)
+    graph = build_graph(polycrystal, y0)
     state_rhs = phase_field(graph)
-    odeint(polycrystal, mesh, explicit_euler, state_rhs, y0, ts)
+    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, ts, xs, ys, ps)
    
 
 def run():
     args.case = 'fd'
-    # args.case = 'fd'
-
-    if args.case == 'gn':
-        # args.dt = 2*1e-7
-        # ts = np.arange(0., args.dt*12001, args.dt)
-        args.dt = 2*1e-7
-        ts = np.arange(0., args.dt*10001, args.dt)
-        simulate(ts, polycrystal_gn)
-    else:
-        # args.dt = 2 * 1e-7
-        # ts = np.arange(0., args.dt*12001, args.dt)
-        args.dt = 2*1e-7
-        ts = np.arange(0., args.dt*10001, args.dt)
-        simulate(ts, polycrystal_fd)
+    ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
+    simulate(ts, xs, ys, ps, polycrystal_fd)
 
 
 if __name__ == "__main__":

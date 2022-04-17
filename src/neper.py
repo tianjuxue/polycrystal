@@ -4,17 +4,23 @@ from src.arguments import args
  
 
 def domain():
+    # TODO: store these old values
+    # args.num_grains = 20000
+    # args.domain_width = 0.2
+    # args.r_beam = 0.05
+    # args.power = 100
+
     # os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube(1,1,0.3)" -ori "file(data/neper/input.ori)" -o data/neper/domain -format tess,ori')
     os.system(f'neper -T -n {args.num_grains} -id 1 -regularization 0 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
-                -o data/neper/domain -format tess,obj,ori')
-    os.system(f'neper -T -loadtess data/neper/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
-    os.system(f'neper -M -rcl 1 -elttype hex -faset faces data/neper/domain.tess')
+                -o data/neper/domain_big/domain -format tess,obj,ori')
+    os.system(f'neper -T -loadtess data/neper/domain_big/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
+    os.system(f'neper -M -rcl 1 -elttype hex -faset faces data/neper/domain_big/domain.tess')
  
 
 def simple():
-    os.system(f'neper -T -n 20 -reg 0 -o data/neper/debug/simple -format tess,ori')
-    os.system(f'neper -T -loadtess data/neper/debug/simple.tess -statcell facelist,npolylist -statface nfaces')
-    os.system(f'neper -M data/neper/debug/simple.tess -rcl 1 -elttype hex')
+    os.system(f'neper -T -n 20 -reg 0 -o data/neper/debug/domain -format tess,ori,obj')
+    os.system(f'neper -T -loadtess data/neper/debug/domain.tess -statcell facelist,npolylist -statface nfaces')
+    os.system(f'neper -M data/neper/debug/domain.tess -rcl 1 -elttype hex')
  
 
 # def visualize(): 
@@ -56,5 +62,5 @@ def simple():
 
 
 if __name__ == "__main__":
-    # domain()
-    simple()
+    domain()
+    # simple()
