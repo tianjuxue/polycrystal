@@ -47,14 +47,12 @@ def explicit_euler(state, t_crt, f, *ode_params):
     return (y_crt, t_crt), y_crt
 
 
-def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, ts, xs, ys, ps):
+def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, ys, ps):
     '''
     ODE integrator. 
     '''
     clean_sols()
     state = (y0, ts[0])
-    # TODO: for multi-layer printing, melt should not be intialized this way
-    melt = np.zeros(len(y0), dtype=bool)
     write_sols(polycrystal, mesh, y0, melt, 0)
     for (i, t_crt) in enumerate(ts[1:]):
         state, y = stepper(state, t_crt, f, xs[i + 1], ys[i + 1], ps[i + 1])
@@ -154,14 +152,19 @@ def write_sols(polycrystal, mesh, y, melt, step):
         onp.save(f"data/numpy/{args.case}/sols/melt_{step:03d}.npy", melt)
         mesh.write(f"data/vtk/{args.case}/sols/u{step:03d}.vtu")
     else:
-        mesh.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/u{step:03d}.vtu")
+        if args.layer < 6:
+            mesh.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/u{step:03d}.vtu")
 
 
 def write_final_sols(polycrystal, mesh_bottom_layer, y, melt):
     if args.case == 'part':
-        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/y_final.npy', y[args.layer_num_dofs:, :])
+        y_to_save = onp.array(y[args.layer_num_dofs:, :])
+        y_to_save[:, 0] = args.T_ambient
+        y_to_save[:, 1] = 1.
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/y_final.npy', y_to_save)
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/melt_final.npy', melt[args.layer_num_dofs:])
         write_sols_heper(polycrystal, mesh_bottom_layer, y[:args.layer_num_dofs, :], melt[:args.layer_num_dofs])
-        mesh_bottom_layer.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/sol_layer_{args.layer:03d}.vtu")
+        mesh_bottom_layer.write(f"data/vtk/{args.case}/sols/group/sol_bottom_layer_{args.layer:03d}.vtu")
 
 
 def polycrystal_gn(domain_name='domain_big'):
@@ -322,13 +325,15 @@ def default_initialization(poly_sim):
     eta = eta.at[np.arange(num_nodes), poly_sim.cell_ori_inds].set(1)
     # shape of state: (num_nodes, 1 + 1 + args.num_oris)
     y0 = np.hstack((T[:, None], zeta[:, None], eta))
-    return y0
+    melt = np.zeros(len(y0), dtype=bool)
+    return y0, melt
 
 
 def layered_initialization(poly_top_layer):
-    y_top = default_initialization(poly_top_layer)
+    y_top, melt_top = default_initialization(poly_top_layer)
     y_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/y_final.npy')
-    return np.vstack((y_down, y_top))
+    melt_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/melt_final.npy')
+    return np.vstack((y_down, y_top)), np.hstack((melt_down, melt_top))
 
 
 def build_graph(polycrystal, y0):
@@ -366,7 +371,7 @@ def update_graph():
     With the help of Jraph, we can compute both grad_energy and local_energy easily.
     Note that grad_energy should be understood as stored in edges, while local_energy stored in nodes.
     '''
-
+    # TODO: Don't do sum here. Let Jraph do sum by defining global energy.
     def update_edge_fn(edges, senders, receivers, globals_):
         '''
         Compute grad_energy for T, zeta, eta
@@ -489,10 +494,10 @@ def phase_field(graph):
 @walltime
 def simulate(ts, xs, ys, ps, func):
     polycrystal, mesh = func()
-    y0 = default_initialization(polycrystal)
+    y0, melt = default_initialization(polycrystal)
     graph = build_graph(polycrystal, y0)
     state_rhs = phase_field(graph)
-    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, ts, xs, ys, ps)
+    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
    
 
 def run():

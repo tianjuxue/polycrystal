@@ -32,10 +32,6 @@ def generate_demo_graph():
 
 
 def fd_gn_compare():
-    # args.num_grains = 40000
-    # args.domain_width = 0.4
-    # args.r_beam = 0.1
-    # args.power = 200
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
 
     args.case = 'gn'

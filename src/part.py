@@ -1,6 +1,6 @@
 import numpy as onp
 import os
-from src.utils import obj_to_vtu
+from src.utils import obj_to_vtu, read_path, walltime
 from src.arguments import args
 from src.allen_cahn import polycrystal_gn, PolyCrystal, build_graph, phase_field, odeint, explicit_euler, default_initialization, layered_initialization
 import copy
@@ -8,14 +8,15 @@ import meshio
 
 
 def set_params():
-    args.num_grains = 25000
-    args.domain_length = 1.
-    args.domain_width = 1.
+    args.num_grains = 100000
+    args.domain_length = 2.
+    args.domain_width = 2.
     args.domain_height = 0.025
+    args.write_sol_interval = 5000
     args.case = 'part'    
 
 
-def part():
+def neper_domain():
     set_params()
     os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
                 -o data/neper/part/domain -format tess,obj,ori')
@@ -71,7 +72,7 @@ def merge_mesh(mesh1, mesh2):
     cells_merged = [('polyhedron', onp.concatenate((cells1, cells2)))]
     mesh_merged = meshio.Mesh(points_merged, cells_merged)
     return mesh_merged
- 
+
 
 def merge_poly(poly1, poly2):
     '''
@@ -117,16 +118,21 @@ def merge_poly(poly1, poly2):
     return poly_merged
 
 
-def randomize_oris(poly):
+def randomize_oris(poly, seed):
+    onp.random.seed(seed)
     cell_ori_inds = onp.random.randint(args.num_oris, size=len(poly.volumes))
     poly.cell_ori_inds[:] = cell_ori_inds
 
 
+@walltime
 def run_helper():
     print(f"Merge into poly layer")
     poly1, mesh1  = polycrystal_gn('part')
+    N_random = 100
+    randomize_oris(poly1, N_random*args.layer + 1)
     poly2 = copy.deepcopy(poly1)
-    randomize_oris(poly2)
+    randomize_oris(poly2, N_random*args.layer + 2)
+
     mesh2 = copy.deepcopy(mesh1)
     flip_poly(poly2, poly1.meta_info[2] + poly1.meta_info[5])
     flip_mesh(mesh2, poly1.meta_info[2] + poly1.meta_info[5])
@@ -135,9 +141,12 @@ def run_helper():
     args.layer_num_dofs = len(poly_layer1.volumes)
     args.layer_height = poly_layer1.meta_info[5]
 
+    # mesh_layer1.write(f'data/vtk/part/domain.vtu')
+
     print(f"Merge into poly sim")
     poly_layer2 = copy.deepcopy(poly_layer1)
-    randomize_oris(poly_layer2)
+    randomize_oris(poly_layer2, N_random*args.layer + 3)
+
     mesh_layer2 = copy.deepcopy(mesh_layer1)
     lift_poly(poly_layer2, poly_layer1.meta_info[5])
     lift_mesh(mesh_layer2, poly_layer1.meta_info[5])
@@ -154,39 +163,43 @@ def run_helper():
     lift_mesh(bottom_mesh, lift_val)
 
     if args.layer == 1:
-        y0 = default_initialization(poly_sim)
+        y0, melt = default_initialization(poly_sim)
     else:
-        y0 = layered_initialization(poly_top_layer)
+        y0, melt = layered_initialization(poly_top_layer)
+
+    print(f"test random = {onp.sum(poly_layer1.cell_ori_inds)}")
 
     graph = build_graph(poly_sim, y0)
     state_rhs = phase_field(graph)
+    # This is how you generate NU.txt
+    # traveled_time = onp.cumsum(onp.array([0., 0.6, (0.6**2 + 0.3**2)**0.5, 0.6, 0.2, 0.6, 0.3, 0.6, 0.4]))/500.
     ts, xs, ys, ps = read_path(f'data/txt/NU.txt')
-    odeint(poly_sim, mesh_sim,  bottom_mesh, explicit_euler, state_rhs, y0, ts, xs, ys, ps)
+    odeint(poly_sim, mesh_sim,  bottom_mesh, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
 
 
+@walltime
 def run():
     set_params()
-    for i in range(3):
+    for i in range(0, 20):
+        print(f"\nLayer {i + 1}...")
         args.layer = i + 1
         onp.random.seed(args.layer)
         run_helper()
 
 
-def exp():
-    set_params()
-    poly1, mesh1 = polycrystal_gn('part')
-    poly2 = copy.deepcopy(poly1)
-    mesh2 = copy.deepcopy(mesh1)
-    lift_poly(poly2, args.domain_height)
-    flip_mesh(mesh2, args.domain_height)
-    mesh_merged = merge_mesh(mesh1, mesh2)
-    poly_merged = merge_poly(poly1, poly2)
-    # print(len(poly_merged.volumes))
-    print(f"write to solutions")
-    mesh_merged.write(f'data/vtk/part/domain.vtu')
+# def exp():
+#     set_params()
+#     poly1, mesh1 = polycrystal_gn('part')
+#     poly2 = copy.deepcopy(poly1)
+#     mesh2 = copy.deepcopy(mesh1)
+#     lift_poly(poly2, args.domain_height)
+#     flip_mesh(mesh2, args.domain_height)
+#     mesh_merged = merge_mesh(mesh1, mesh2)
+#     poly_merged = merge_poly(poly1, poly2)
+#     # print(len(poly_merged.volumes))
+#     print(f"write to solutions")
 
 
 if __name__ == "__main__":
-    # simple()
+    # neper_domain()
     run()
-

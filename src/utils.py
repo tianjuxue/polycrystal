@@ -24,7 +24,6 @@ def unpack_state(state):
 
 def get_unique_ori_colors():
     onp.random.seed(0)
-    # unique_oris = R.random(args.num_oris, random_state=0).as_euler('zxz', degrees=True)
     ori2 = Orientation.random(args.num_oris)
     v = Vector3d((0, 1, 0))
     ipfkey = plot.IPFColorKeyTSL(symmetry.Oh, v)
@@ -36,7 +35,6 @@ def get_unique_ori_colors():
 
 
 def ipf_logo():
-    # We'll want our plots to look a bit larger than the default size
     new_params = {
         "figure.facecolor": "w",
         "figure.figsize": (6, 3),
@@ -108,6 +106,7 @@ def read_path(path):
         ps.append(ps_seg)
 
     ts, xs, ys, ps = onp.hstack(ts), onp.hstack(xs), onp.hstack(ys), onp.hstack(ps)  
+    print(f"Total number of time steps = {len(ts)}")
     return ts, xs, ys, ps
 
 
@@ -407,4 +406,4 @@ if __name__ == "__main__":
     # produce_figures()
     # post_results()
     # plt.show()
-# 
+ 
