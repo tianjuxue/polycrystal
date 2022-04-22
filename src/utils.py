@@ -13,6 +13,7 @@ from orix.quaternion import Orientation, symmetry
 from orix.vector import Vector3d
 from src.arguments import args
 from sklearn.decomposition import PCA
+from scipy.spatial.transform import Rotation as R
 
 
 def unpack_state(state):
@@ -23,15 +24,33 @@ def unpack_state(state):
 
 
 def get_unique_ori_colors():
-    onp.random.seed(0)
+    onp.random.seed(1)
     ori2 = Orientation.random(args.num_oris)
-    v = Vector3d((0, 1, 0))
-    ipfkey = plot.IPFColorKeyTSL(symmetry.Oh, v)
-    ori2.symmetry = symmetry.Oh
-    rgb_y = ipfkey.orientation2color(ori2)
-    ori2.scatter("ipf", c=rgb_y, direction=ipfkey.direction)
+
+    vx = Vector3d((1, 0, 0))
+    vy = Vector3d((0, 1, 0))
+    vz = Vector3d((0, 0, 1))
+    ipfkey_x = plot.IPFColorKeyTSL(symmetry.Oh, vx)
+    rgb_x = ipfkey_x.orientation2color(ori2)
+    ipfkey_y = plot.IPFColorKeyTSL(symmetry.Oh, vy)
+    rgb_y = ipfkey_y.orientation2color(ori2)
+    ipfkey_z = plot.IPFColorKeyTSL(symmetry.Oh, vz)
+    rgb_z = ipfkey_z.orientation2color(ori2)
+    rgb = onp.stack((rgb_x, rgb_y, rgb_z))
+
     onp.save(f"data/numpy/quat.npy", ori2.data)
-    return rgb_y
+    dx = onp.array([1., 0., 0.])
+    dy = onp.array([0., 1., 0.])
+    dz = onp.array([0., 0., 1.])
+    scipy_quat = onp.concatenate((ori2.data[:, 1:], ori2.data[:, :1]), axis=1)
+    r = R.from_quat(scipy_quat)
+    grain_directions = onp.stack((r.apply(dx), r.apply(dy), r.apply(dz)))
+
+    # Plot IPF for those orientations
+    ori2.symmetry = symmetry.Oh
+    ori2.scatter("ipf", c=rgb_z, direction=ipfkey_z.direction)
+
+    return rgb, grain_directions
 
 
 def ipf_logo():
@@ -46,6 +65,8 @@ def ipf_logo():
     plot.IPFColorKeyTSL(symmetry.Oh).plot()
     plt.savefig(f'data/pdf/ipf.pdf', bbox_inches='tight')
 
+
+    
 
 def make_video():
     # The command -pix_fmt yuv420p is to ensure preview of video on Mac OS is enabled
@@ -265,6 +286,10 @@ def produce_figures():
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
     ts = ts[::args.write_sol_interval]*1e6
 
+    volumes = onp.load(f"data/numpy/fd/info/vols.npy")
+    num_fd_nodes = len(volumes)
+    avg_cell_vol, avg_cell_len = fd_helper(num_fd_nodes)
+
     def T_plot():
         T_results_fd = onp.load(f"data/numpy/fd/post-processing/T_collect.npy")
         T_results_gn = onp.load(f"data/numpy/gn/post-processing/T_collect.npy")
@@ -276,7 +301,7 @@ def produce_figures():
 
         fig = plt.figure(figsize=(8, 6))
         plt.plot(x, T_select_fd, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
-        plt.plot(x, T_select_gn, label='PIGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
+        plt.plot(x, T_select_gn, label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
         plt.xlabel(r'x-axis [$\mu$m]', fontsize=20)
         plt.ylabel(r'Temperature [K]', fontsize=20)
         plt.tick_params(labelsize=18)
@@ -286,7 +311,7 @@ def produce_figures():
         ind_T = T_results_fd.shape[1]//2
         fig = plt.figure(figsize=(8, 6))
         plt.plot(ts, T_results_fd[:, ind_T], label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
-        plt.plot(ts, T_results_gn[:, ind_T], label='PIGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
+        plt.plot(ts, T_results_gn[:, ind_T], label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
         plt.xlabel(r'Time [$\mu$s]', fontsize=20)
         plt.ylabel(r'Temperature [K]', fontsize=20)
         plt.tick_params(labelsize=18)
@@ -302,7 +327,7 @@ def produce_figures():
         for i in range(4):
             fig = plt.figure(figsize=(8, 6))
             plt.plot(ts, zeta_results_fd[:, i], label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
-            plt.plot(ts, zeta_results_gn[:, i], label='PIGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
+            plt.plot(ts, zeta_results_gn[:, i], label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
             plt.xlabel(r'Time [$\mu$s]', fontsize=20)
             plt.ylabel(labels[i], fontsize=20)
             plt.tick_params(labelsize=18)
@@ -314,7 +339,8 @@ def produce_figures():
         eta_results_fd = onp.load(f"data/numpy/fd/post-processing/eta_collect.npy", allow_pickle=True)
         eta_results_gn = onp.load(f"data/numpy/gn/post-processing/eta_collect.npy", allow_pickle=True)
 
-        val = 1e-7
+        # 1e-7 is used before
+        val = 1.6*1e-7
         # val = 1e-6
 
         def eta_helper(eta_results):
@@ -340,7 +366,7 @@ def produce_figures():
 
         fig = plt.figure(figsize=(8, 6))
         plt.plot(ts, num_vols_fd, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
-        plt.plot(ts, num_vols_gn, label='PIGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
+        plt.plot(ts, num_vols_gn, label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
         plt.xlabel(r'Time [$\mu$s]', fontsize=20)
         plt.ylabel(r'Number of grains', fontsize=20)
         plt.tick_params(labelsize=18)
@@ -349,7 +375,7 @@ def produce_figures():
 
         fig = plt.figure(figsize=(8, 6))
         plt.plot(ts, avg_vol_fd, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
-        plt.plot(ts, avg_vol_gn, label='PIGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
+        plt.plot(ts, avg_vol_gn, label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)
         plt.xlabel(r'Time [$\mu$s]', fontsize=20)
         plt.ylabel(r'Average grain volume [$\mu$m$^3$]', fontsize=20)
         plt.tick_params(labelsize=18)
@@ -370,11 +396,11 @@ def produce_figures():
         print(f"gn mean vol = {onp.mean(gn_vols)}")
 
         print("\n")
-        print(f"fd mean aspect_ratio = {onp.mean(fd_aspect_ratios)}")
-        print(f"gn mean aspect_ratio = {onp.mean(gn_aspect_ratios)}")
+        print(f"fd median aspect_ratio = {onp.median(fd_aspect_ratios)}")
+        print(f"gn median aspect_ratio = {onp.median(gn_aspect_ratios)}")
 
         colors = ['blue', 'red']
-        labels = ['DNS', 'PIGN']
+        labels = ['DNS', 'PEGN']
 
         fig = plt.figure(figsize=(8, 6))
         plt.hist([fd_vols, gn_vols], color=colors, bins=onp.linspace(0., 1e4, 6), label=labels)
@@ -392,18 +418,18 @@ def produce_figures():
         plt.tick_params(labelsize=18)
         plt.savefig(f'data/pdf/aspect_distribution.pdf', bbox_inches='tight')
 
-    T_plot()
-    zeta_plot()
+    # T_plot()
+    # zeta_plot()
     eta_plot()
 
 
 if __name__ == "__main__":
     # vtk_convert_from_server()
-    # get_unique_ori_colors()
-    ipf_logo()
+    get_unique_ori_colors()
+    # ipf_logo()
     # make_video()
     # compute_stats()
     # produce_figures()
     # post_results()
-    # plt.show()
+    plt.show()
  

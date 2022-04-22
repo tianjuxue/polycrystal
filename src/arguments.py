@@ -46,6 +46,7 @@ parser.add_argument('--kappa_p', type=float, help='Unit: J/mm', default=2.77e-9)
 parser.add_argument('--kappa_g', type=float, help='Unit: J/mm', default=3.7e-9)
 parser.add_argument('--m_p', type=float, help='Unit: J/mm^3', default=1.2e-4)
 parser.add_argument('--m_g', type=float, help='Unit: J/mm^3', default=2.4e-4)
+parser.add_argument('--anisotropy', type=float, help='Unit: None', default=0.15)
 parser.add_argument('--ad_hoc', type=float, help='Unit: None', default=1.)
 
 parser.add_argument('--write_sol_interval', type=int, help='interval of writing solutions to file', default=500)

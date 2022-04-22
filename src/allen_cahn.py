@@ -13,11 +13,11 @@ from matplotlib import pyplot as plt
 from src.arguments import args
 from src.plots import save_animation
 from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime, read_path
+ 
 
-
-# TODO: unique_oris should be a class property, not an instance property
-PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris', 'cell_ori_inds', 
-    'boundary_face_areas', 'boundary_face_centroids', 'meta_info'])
+# TODO: unique_oris_rgb and unique_grain_directions should be a class property, not an instance property
+PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris_rgb', 
+    'unique_grain_directions', 'cell_ori_inds', 'boundary_face_areas', 'boundary_face_centroids', 'meta_info'])
 
 
 @partial(jax.jit, static_argnums=(2,))
@@ -47,6 +47,16 @@ def explicit_euler(state, t_crt, f, *ode_params):
     return (y_crt, t_crt), y_crt
 
 
+@jax.jit
+def force_eta_zero_in_liquid(y):
+    '''
+    In liquid zone, set all eta to be zero.
+    '''
+    T, zeta, eta = unpack_state(y)
+    eta = np.where(zeta < 0.5, 0., eta)
+    return np.hstack((T, zeta, eta))
+
+
 def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, ys, ps):
     '''
     ODE integrator. 
@@ -56,6 +66,7 @@ def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, y
     write_sols(polycrystal, mesh, y0, melt, 0)
     for (i, t_crt) in enumerate(ts[1:]):
         state, y = stepper(state, t_crt, f, xs[i + 1], ys[i + 1], ps[i + 1])
+        state = (force_eta_zero_in_liquid(y), t_crt)
         melt = np.logical_or(melt, y[:, 1] < 0.5)
         if (i + 1) % 20 == 0:
             print(f"step {i + 1}")
@@ -125,10 +136,14 @@ def write_sols_heper(polycrystal, mesh, y, melt):
     zeta = y[:, 1]
     eta = y[:, 2:]
     cell_ori_inds = onp.argmax(eta, axis=1)
-    oris = onp.take(polycrystal.unique_oris, cell_ori_inds, axis=0)
+    ipf_x = onp.take(polycrystal.unique_oris_rgb[0], cell_ori_inds, axis=0)
+    ipf_y = onp.take(polycrystal.unique_oris_rgb[1], cell_ori_inds, axis=0)
+    ipf_z = onp.take(polycrystal.unique_oris_rgb[2], cell_ori_inds, axis=0)
     mesh.cell_data['T'] = [onp.array(T, dtype=onp.float32)]
     mesh.cell_data['zeta'] = [onp.array(zeta, dtype=onp.float32)]
-    mesh.cell_data['eta'] = [oris]
+    mesh.cell_data['ipf_x'] = [ipf_x]
+    mesh.cell_data['ipf_y'] = [ipf_y]
+    mesh.cell_data['ipf_z'] = [ipf_z]
     mesh.cell_data['melt'] = [onp.array(melt, dtype=onp.float32)]
     cell_ori_inds = onp.array(cell_ori_inds, dtype=onp.int32)
     mesh.cell_data['ori_inds'] = [cell_ori_inds]
@@ -171,7 +186,7 @@ def polycrystal_gn(domain_name='domain_big'):
     '''
     Prepare graph information for reduced-order modeling
     '''
-    unique_oris = get_unique_ori_colors()
+    unique_oris_rgb, unique_grain_directions = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = grain_oris_inds
     mesh = obj_to_vtu(domain_name)
@@ -243,7 +258,7 @@ def polycrystal_gn(domain_name='domain_big'):
     # ch_len_avg = (domain_vol / args.num_grains)**(1./3.) * onp.ones(len(new_face_areas))
 
     meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
-    polycrystal = PolyCrystal(new_edges, ch_len, centroids, volumes, unique_oris, 
+    polycrystal = PolyCrystal(new_edges, ch_len, centroids, volumes, unique_oris_rgb, unique_grain_directions,
                               cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
 
     return polycrystal, mesh
@@ -261,13 +276,16 @@ def polycrystal_fd(domain_name='domain_big'):
     onp.save(f"data/numpy/fd/info/cell_grain_inds.npy", cell_grain_inds)
     assert args.num_grains == onp.max(cell_grain_inds) + 1
 
-    unique_oris = get_unique_ori_colors()
+    unique_oris_rgb, unique_grain_directions = get_unique_ori_colors()
     grain_oris_inds = onp.random.randint(args.num_oris, size=args.num_grains)
     cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds, axis=0)
 
     Nx = round(args.domain_length / points[1, 0])
     Ny = round(args.domain_width / points[Nx + 1, 1])
     Nz = round(args.domain_height / points[(Nx + 1)*(Ny + 1), 2])
+    args.Nx = Nx
+    args.Ny = Ny
+    args.Nz = Nz
 
     print(f"Total num of grains = {args.num_grains}")
     print(f"Total num of orientations = {args.num_oris}")
@@ -311,8 +329,16 @@ def polycrystal_fd(domain_name='domain_big'):
     boundary_face_areas = onp.transpose(onp.stack(boundary_face_areas))
 
     meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
-    polycrystal = PolyCrystal(edges, ch_len, centroids, volumes, unique_oris, 
+    polycrystal = PolyCrystal(edges, ch_len, centroids, volumes, unique_oris_rgb, unique_grain_directions,
                               cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
+
+
+    # centroids_reshape = onp.reshape(centroids, (Nz, Ny, Nx, 3))
+    # print(centroids_reshape[Nz - 1, 0, Nx - 1])
+    # print(centroids_reshape[Nz - 1, Ny - 1, Nx - 1])
+    # print(centroids_reshape[0, 0, Nx - 1])
+    # print(centroids_reshape[0, Ny - 1, Nx - 1])
+    # exit()
 
     return polycrystal, mesh
 
@@ -358,7 +384,8 @@ def build_graph(polycrystal, y0):
                      'boundary_face_areas': polycrystal.boundary_face_areas, 
                      'boundary_face_centroids': polycrystal.boundary_face_centroids}
 
-    edge_features = {'ch_len': polycrystal.ch_len[:, None]}
+    edge_features = {'ch_len': polycrystal.ch_len[:, None],
+                     'anisotropy': np.ones((n_edge[0], args.num_oris))}
 
     graph = jraph.GraphsTuple(nodes=node_features, edges=edge_features, senders=senders, receivers=receivers,
         n_node=n_node, n_edge=n_edge, globals={})
@@ -380,9 +407,11 @@ def update_graph():
         sender_T, sender_zeta, sender_eta = unpack_state(senders['state'])
         receiver_T, receiver_zeta, receiver_eta = unpack_state(receivers['state'])
         ch_len = edges['ch_len']
+        anisotropy = edges['anisotropy']
+        assert anisotropy.shape == sender_eta.shape
         grad_energy_T = args.kappa_T * 0.5 * np.sum((sender_T - receiver_T)**2 * ch_len)
         grad_energy_zeta = args.kappa_p * 0.5 * np.sum((sender_zeta - receiver_zeta)**2 * ch_len)
-        grad_energy_eta = args.kappa_g * 0.5 * np.sum((sender_eta - receiver_eta)**2 * ch_len)
+        grad_energy_eta = args.kappa_g * 0.5 * np.sum((sender_eta - receiver_eta)**2 * ch_len * anisotropy)
         grad_energy = (grad_energy_zeta + grad_energy_eta) * args.ad_hoc + grad_energy_T
  
         return {'grad_energy': grad_energy}
@@ -394,9 +423,7 @@ def update_graph():
         del sent_edges, received_edges
 
         T, zeta, eta = unpack_state(nodes['state'])
-
         assert T.shape == zeta.shape
-
         phi = 0.5 * (1 - np.tanh(1e2*(T/args.T_melt - 1)))
         phase_energy = args.m_p * np.sum(((1 - zeta)**2 * phi + zeta**2 * (1 - phi)))
         gamma = 1
@@ -423,7 +450,7 @@ def update_graph():
     return net_fn
 
 
-def phase_field(graph):
+def phase_field(graph, polycrystal):
     net_fn = update_graph()
     volumes = graph.nodes['volumes']
     centroids = graph.nodes['centroids']
@@ -457,6 +484,44 @@ def phase_field(graph):
 
         return q[:, None]
 
+    def update_anisotropy():
+        '''
+        Determine anisotropy (see Yan paper Eq. (12))
+        '''
+        print("compute_anisotropy...")
+        if args.case == 'fd':
+            y = graph.nodes['state']
+            eta = y[:, 2:]
+            eta_xyz = np.reshape(eta, (args.Nz, args.Ny, args.Nx, args.num_oris))
+            eta_neg_x = np.concatenate((eta_xyz[:, :, :1, :], eta_xyz[:, :, :-1, :]), axis=2)
+            eta_pos_x = np.concatenate((eta_xyz[:, :, 1:, :], eta_xyz[:, :, -1:, :]), axis=2)
+            eta_neg_y = np.concatenate((eta_xyz[:, :1, :, :], eta_xyz[:, :-1, :, :]), axis=1)
+            eta_pos_y = np.concatenate((eta_xyz[:, 1:, :, :], eta_xyz[:, -1:, :, :]), axis=1)
+            eta_neg_z = np.concatenate((eta_xyz[:1, :, :, :], eta_xyz[:-1, :, :, :]), axis=0)
+            eta_pos_z = np.concatenate((eta_xyz[1:, :, :, :], eta_xyz[-1:, :, :, :]), axis=0)
+            directions_xyz = np.stack((eta_pos_x - eta_neg_x, eta_pos_y - eta_neg_y, eta_pos_z - eta_neg_z), axis=-1)
+            assert directions_xyz.shape == (args.Nz, args.Ny, args.Nx, args.num_oris, args.dim)
+            directions = directions_xyz.reshape(-1, args.num_oris, args.dim)
+            sender_directions = np.take(directions, graph.senders, axis=0)
+            receivers_directions = np.take(directions, graph.receivers, axis=0)
+            edge_directions = (sender_directions + receivers_directions) / 2.
+        else:
+            sender_centroids = np.take(centroids, graph.senders, axis=0)
+            receiver_centroids = np.take(centroids, graph.receivers, axis=0)
+            edge_directions = sender_centroids - receiver_centroids
+            edge_directions = np.repeat(edge_directions[:, None, :], args.num_oris, axis=1) # (num_edges, num_oris, dim)
+ 
+        assert edge_directions.shape == (len(graph.senders), args.num_oris, args.dim)
+        unique_grain_directions = polycrystal.unique_grain_directions # (num_directions_per_cube, num_oris, dim)
+        cosines = np.sum(unique_grain_directions[None, :, :, :] * edge_directions[:, None, :, :], axis=-1) \
+                  / (np.linalg.norm(edge_directions, axis=-1)[:, None, :])
+        anlges =  np.arccos(cosines) 
+        anisotropy_term =  1 + args.anisotropy * np.max((np.cos(anlges)**4 + np.sin(anlges)**4), axis=1) # (num_edges, num_oris)
+        assert anisotropy_term.shape == (len(graph.senders), args.num_oris)
+        anisotropy_term = np.where(np.isfinite(anisotropy_term), anisotropy_term, 1 + args.anisotropy/2.)
+        graph.edges['anisotropy'] = anisotropy_term
+ 
+
     def compute_energy(y, t, *ode_params):
         '''
         When you call net_fn, you are asking Jraph to compute the total free energy (grad energy + local energy) for you.
@@ -473,10 +538,11 @@ def phase_field(graph):
         '''
         Define the right-hand-side function for the ODE system
         '''
+        update_anisotropy()
         _, _, q = compute_energy(y, t, *ode_params)
         T, zeta, eta = unpack_state(y)
 
-        # ad-hoc: If T is too large, L would be too large - solution diverges
+        # If T is too large, L would be too large - solution diverges; Also, T too large is not physical.
         T = np.where(T > 2000., 2000., T)
 
         der_grad = grad_energy_der_fn(y, t, *ode_params)
@@ -491,12 +557,21 @@ def phase_field(graph):
     return state_rhs
 
 
+def debug():
+    args.case = 'fd'
+    ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
+    if args.case == 'gn':
+        simulate(ts, xs, ys, ps, polycrystal_gn)
+    else:
+        simulate(ts, xs, ys, ps, polycrystal_fd)
+
+
 @walltime
 def simulate(ts, xs, ys, ps, func):
     polycrystal, mesh = func()
     y0, melt = default_initialization(polycrystal)
     graph = build_graph(polycrystal, y0)
-    state_rhs = phase_field(graph)
+    state_rhs = phase_field(graph, polycrystal)
     odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
    
 
@@ -507,4 +582,5 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    # run()
+    debug()

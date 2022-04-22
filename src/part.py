@@ -112,7 +112,7 @@ def merge_poly(poly1, poly2):
 
     meta_info = onp.hstack((poly1.meta_info[:5], poly1.meta_info[5:] + poly2.meta_info[5:]))
 
-    poly_merged = PolyCrystal(edges_merged, ch_len_merged, centroids_merged, volumes_merged, poly1.unique_oris, 
+    poly_merged = PolyCrystal(edges_merged, ch_len_merged, centroids_merged, volumes_merged, poly1.oris_rgb, poly1.unique_grain_directions,
                               cell_ori_inds_merged, boundary_face_areas_merged, boundary_face_centroids_merged, meta_info)
 
     return poly_merged
@@ -170,7 +170,7 @@ def run_helper():
     print(f"test random = {onp.sum(poly_layer1.cell_ori_inds)}")
 
     graph = build_graph(poly_sim, y0)
-    state_rhs = phase_field(graph)
+    state_rhs = phase_field(graph, poly_sim)
     # This is how you generate NU.txt
     # traveled_time = onp.cumsum(onp.array([0., 0.6, (0.6**2 + 0.3**2)**0.5, 0.6, 0.2, 0.6, 0.3, 0.6, 0.4]))/500.
     ts, xs, ys, ps = read_path(f'data/txt/NU.txt')
