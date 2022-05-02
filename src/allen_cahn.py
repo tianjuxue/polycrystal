@@ -5,6 +5,7 @@ import numpy as onp
 import meshio
 import os
 import glob
+import time 
 import pickle
 from functools import partial
 from scipy.spatial.transform import Rotation as R
@@ -57,6 +58,7 @@ def force_eta_zero_in_liquid(y):
     return np.hstack((T, zeta, eta))
 
 
+@walltime
 def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, ys, ps):
     '''
     ODE integrator. 
@@ -69,7 +71,7 @@ def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, y
         state = (force_eta_zero_in_liquid(y), t_crt)
         melt = np.logical_or(melt, y[:, 1] < 0.5)
         if (i + 1) % 20 == 0:
-            print(f"step {i + 1}")
+            print(f"step {i + 1}, time = {time.time()}")
             # print(y[:10, :5])
             inspect_sol(y, y0)
             if not np.all(np.isfinite(y)):          
@@ -549,7 +551,7 @@ def phase_field(graph, polycrystal):
         der_local = local_energy_der_fn(y, t, *ode_params)
         L = args.L0 * np.exp(-args.Qg / (T*args.gas_const))
         rhs_phase_field = -L * (der_grad[:, 1:]/volumes + der_local[:, 1:])
-        rhs_T = (-der_grad[:, 0:1] + q)/volumes/(args.rho * args.c_h)
+        rhs_T = (-der_grad[:, 0:1] + q)/volumes/(args.rho * args.c_p)
         rhs = np.hstack((rhs_T, rhs_phase_field))
 
         return rhs
@@ -557,7 +559,16 @@ def phase_field(graph, polycrystal):
     return state_rhs
 
 
-def debug():
+# @walltime
+def simulate(ts, xs, ys, ps, func):
+    polycrystal, mesh = func()
+    y0, melt = default_initialization(polycrystal)
+    graph = build_graph(polycrystal, y0)
+    state_rhs = phase_field(graph, polycrystal)
+    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
+
+
+def run():
     args.case = 'fd'
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
     if args.case == 'gn':
@@ -566,21 +577,5 @@ def debug():
         simulate(ts, xs, ys, ps, polycrystal_fd)
 
 
-@walltime
-def simulate(ts, xs, ys, ps, func):
-    polycrystal, mesh = func()
-    y0, melt = default_initialization(polycrystal)
-    graph = build_graph(polycrystal, y0)
-    state_rhs = phase_field(graph, polycrystal)
-    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
-   
-
-def run():
-    args.case = 'fd'
-    ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
-    simulate(ts, xs, ys, ps, polycrystal_fd)
-
-
 if __name__ == "__main__":
-    # run()
-    debug()
+    run()

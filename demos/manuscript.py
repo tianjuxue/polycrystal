@@ -10,6 +10,9 @@ from src.allen_cahn import *
 
 
 def generate_demo_graph():
+    '''
+    Produce the grain graph in Fig. 1 in the manuscript
+    '''
     args.num_grains = 10
     args.domain_length = 1.
     args.domain_width = 1.

@@ -47,8 +47,21 @@ def get_unique_ori_colors():
     grain_directions = onp.stack((r.apply(dx), r.apply(dy), r.apply(dz)))
 
     # Plot IPF for those orientations
+    new_params = {
+        "figure.facecolor": "w",
+        "figure.figsize": (6, 3),
+        "lines.markersize": 6,
+        "font.size": 20,
+        "axes.grid": True,
+    }
+    plt.rcParams.update(new_params)
     ori2.symmetry = symmetry.Oh
+    ori2.scatter("ipf", c=rgb_x, direction=ipfkey_x.direction)
+    plt.savefig(f'data/pdf/ipf_x.pdf', bbox_inches='tight')
+    ori2.scatter("ipf", c=rgb_y, direction=ipfkey_y.direction)
+    plt.savefig(f'data/pdf/ipf_y.pdf', bbox_inches='tight')
     ori2.scatter("ipf", c=rgb_z, direction=ipfkey_z.direction)
+    plt.savefig(f'data/pdf/ipf_z.pdf', bbox_inches='tight')
 
     return rgb, grain_directions
 
@@ -63,7 +76,7 @@ def ipf_logo():
     }
     plt.rcParams.update(new_params)
     plot.IPFColorKeyTSL(symmetry.Oh).plot()
-    plt.savefig(f'data/pdf/ipf.pdf', bbox_inches='tight')
+    plt.savefig(f'data/pdf/ipf_legend.pdf', bbox_inches='tight')
 
 
     
@@ -99,12 +112,15 @@ def obj_to_vtu(domain_name='domain'):
 
 
 def walltime(func):
-    def wrapper(*args, **kwargs):
+    def wrapper(*list_args, **keyword_wargs):
         start_time = time.time()
-        func(*args, **kwargs)
+        func(*list_args, **keyword_wargs)
         end_time = time.time()
         time_elapsed = end_time - start_time
-        print(f"Time elapsed {time_elapsed} on platform {jax.lib.xla_bridge.get_backend().platform}") 
+        platform = jax.lib.xla_bridge.get_backend().platform
+        print(f"Time elapsed {time_elapsed} on platform {platform}") 
+        with open(f'data/txt/walltime_{platform}_{args.case}_{args.layer:03d}.txt', 'w') as f:
+            f.write(f'{start_time}, {end_time}, {time_elapsed}\n')
         return time_elapsed
     return wrapper
 
@@ -339,9 +355,8 @@ def produce_figures():
         eta_results_fd = onp.load(f"data/numpy/fd/post-processing/eta_collect.npy", allow_pickle=True)
         eta_results_gn = onp.load(f"data/numpy/gn/post-processing/eta_collect.npy", allow_pickle=True)
 
-        # 1e-7 is used before
+        # 1e-7 is used before we consider anisotropy
         val = 1.6*1e-7
-        # val = 1e-6
 
         def eta_helper(eta_results):
             vols_filtered = []

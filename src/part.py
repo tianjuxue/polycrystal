@@ -112,7 +112,7 @@ def merge_poly(poly1, poly2):
 
     meta_info = onp.hstack((poly1.meta_info[:5], poly1.meta_info[5:] + poly2.meta_info[5:]))
 
-    poly_merged = PolyCrystal(edges_merged, ch_len_merged, centroids_merged, volumes_merged, poly1.oris_rgb, poly1.unique_grain_directions,
+    poly_merged = PolyCrystal(edges_merged, ch_len_merged, centroids_merged, volumes_merged, poly1.unique_oris_rgb, poly1.unique_grain_directions,
                               cell_ori_inds_merged, boundary_face_areas_merged, boundary_face_centroids_merged, meta_info)
 
     return poly_merged
@@ -124,7 +124,7 @@ def randomize_oris(poly, seed):
     poly.cell_ori_inds[:] = cell_ori_inds
 
 
-@walltime
+# @walltime
 def run_helper():
     print(f"Merge into poly layer")
     poly1, mesh1  = polycrystal_gn('part')
@@ -167,8 +167,6 @@ def run_helper():
     else:
         y0, melt = layered_initialization(poly_top_layer)
 
-    print(f"test random = {onp.sum(poly_layer1.cell_ori_inds)}")
-
     graph = build_graph(poly_sim, y0)
     state_rhs = phase_field(graph, poly_sim)
     # This is how you generate NU.txt
@@ -177,7 +175,6 @@ def run_helper():
     odeint(poly_sim, mesh_sim,  bottom_mesh, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
 
 
-@walltime
 def run():
     set_params()
     for i in range(0, 20):
