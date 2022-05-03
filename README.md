@@ -2,7 +2,7 @@
 
 <video src="materials/Anisotropic.mp4"></video>
 
-Anisotropy:
+ ![u](materials/u.png)
 
-https://github.com/tianjuxue/polycrystal/blob/main/materials/Anisotropic.mp4
+
 
