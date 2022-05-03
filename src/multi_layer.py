@@ -1,8 +1,10 @@
 import numpy as onp
+import jax
+import jax.numpy as np
 import os
 from src.utils import obj_to_vtu, read_path, walltime
 from src.arguments import args
-from src.allen_cahn import polycrystal_gn, PolyCrystal, build_graph, phase_field, odeint, explicit_euler, default_initialization, layered_initialization
+from src.allen_cahn import polycrystal_gn, PolyCrystal, build_graph, phase_field, odeint, explicit_euler
 import copy
 import meshio
 
@@ -13,15 +15,34 @@ def set_params():
     args.domain_width = 2.
     args.domain_height = 0.025
     args.write_sol_interval = 5000
-    args.case = 'part'    
+    args.case = 'gn_multi_layer'    
 
 
 def neper_domain():
     set_params()
     os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
-                -o data/neper/part/domain -format tess,obj,ori')
-    os.system(f'neper -T -loadtess data/neper/part/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
+                -o data/neper/multi_layer/domain -format tess,obj,ori')
+    os.system(f'neper -T -loadtess data/neper/multi_layer/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
    
+
+def default_initialization(poly_sim):
+    num_nodes = len(poly_sim.centroids)
+    T = args.T_ambient*np.ones(num_nodes)
+    zeta = np.ones(num_nodes)
+    eta = np.zeros((num_nodes, args.num_oris))
+    eta = eta.at[np.arange(num_nodes), poly_sim.cell_ori_inds].set(1)
+    # shape of state: (num_nodes, 1 + 1 + args.num_oris)
+    y0 = np.hstack((T[:, None], zeta[:, None], eta))
+    melt = np.zeros(len(y0), dtype=bool)
+    return y0, melt
+
+
+def layered_initialization(poly_top_layer):
+    y_top, melt_top = default_initialization(poly_top_layer)
+    y_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/y_final.npy')
+    melt_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/melt_final.npy')
+    return np.vstack((y_down, y_top)), np.hstack((melt_down, melt_top))
+
 
 def lift_poly(poly, delta_z):
     poly.boundary_face_centroids[:, :, 2] = poly.boundary_face_centroids[:, :, 2] + delta_z
@@ -127,7 +148,7 @@ def randomize_oris(poly, seed):
 # @walltime
 def run_helper():
     print(f"Merge into poly layer")
-    poly1, mesh1  = polycrystal_gn('part')
+    poly1, mesh1  = polycrystal_gn('multi_layer')
     N_random = 100
     randomize_oris(poly1, N_random*args.layer + 1)
     poly2 = copy.deepcopy(poly1)

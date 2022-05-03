@@ -25,7 +25,33 @@ def unpack_state(state):
 
 def get_unique_ori_colors():
     onp.random.seed(1)
-    ori2 = Orientation.random(args.num_oris)
+
+    if args.case == 'fd_solidification':
+
+        # axes = onp.array([[1., 0., 0.], 
+        #                   [1., 1., 0.],
+        #                   [1., 1., 1.],
+        #                   [1., 1., 0.],
+        #                   [1., 0., 0.], 
+        #                   [1., -1., 0.]])
+        # angles = onp.array([0., 
+        #                     onp.pi/8,
+        #                     onp.pi/4,
+        #                     onp.pi/4, 
+        #                     onp.pi/4,
+        #                     onp.pi/2 - onp.arccos(onp.sqrt(2)/onp.sqrt(3))])
+
+        axes = onp.array([[1., 0., 0.], 
+                          [1., 0., 0.], 
+                          [1., -1., 0.]])
+        angles = onp.array([0., 
+                            onp.pi/4,
+                            onp.pi/2 - onp.arccos(onp.sqrt(2)/onp.sqrt(3))])
+
+        args.num_oris = len(axes)
+        ori2 = Orientation.from_axes_angles(axes, angles)
+    else:
+        ori2 = Orientation.random(args.num_oris)        
 
     vx = Vector3d((1, 0, 0))
     vy = Vector3d((0, 1, 0))
@@ -46,22 +72,24 @@ def get_unique_ori_colors():
     r = R.from_quat(scipy_quat)
     grain_directions = onp.stack((r.apply(dx), r.apply(dy), r.apply(dz)))
 
-    # Plot IPF for those orientations
-    new_params = {
-        "figure.facecolor": "w",
-        "figure.figsize": (6, 3),
-        "lines.markersize": 6,
-        "font.size": 20,
-        "axes.grid": True,
-    }
-    plt.rcParams.update(new_params)
-    ori2.symmetry = symmetry.Oh
-    ori2.scatter("ipf", c=rgb_x, direction=ipfkey_x.direction)
-    plt.savefig(f'data/pdf/ipf_x.pdf', bbox_inches='tight')
-    ori2.scatter("ipf", c=rgb_y, direction=ipfkey_y.direction)
-    plt.savefig(f'data/pdf/ipf_y.pdf', bbox_inches='tight')
-    ori2.scatter("ipf", c=rgb_z, direction=ipfkey_z.direction)
-    plt.savefig(f'data/pdf/ipf_z.pdf', bbox_inches='tight')
+    save_ipf = True
+    if save_ipf:
+        # Plot IPF for those orientations
+        new_params = {
+            "figure.facecolor": "w",
+            "figure.figsize": (6, 3),
+            "lines.markersize": 6,
+            "font.size": 20,
+            "axes.grid": True,
+        }
+        plt.rcParams.update(new_params)
+        ori2.symmetry = symmetry.Oh
+        ori2.scatter("ipf", c=rgb_x, direction=ipfkey_x.direction)
+        # plt.savefig(f'data/pdf/ipf_x.pdf', bbox_inches='tight')
+        ori2.scatter("ipf", c=rgb_y, direction=ipfkey_y.direction)
+        # plt.savefig(f'data/pdf/ipf_y.pdf', bbox_inches='tight')
+        ori2.scatter("ipf", c=rgb_z, direction=ipfkey_z.direction)
+        # plt.savefig(f'data/pdf/ipf_z.pdf', bbox_inches='tight')
 
     return rgb, grain_directions
 
@@ -79,7 +107,30 @@ def ipf_logo():
     plt.savefig(f'data/pdf/ipf_legend.pdf', bbox_inches='tight')
 
 
-    
+def generate_demo_graph():
+    '''
+    Produce the grain graph in Fig. 1 in the manuscript
+    '''
+    args.num_grains = 10
+    args.domain_length = 1.
+    args.domain_width = 1.
+    args.domain_height = 1.
+    # os.system(f'neper -T -n {args.num_grains}  -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
+    #     -o data/neper/graph/domain -format tess,obj')
+
+    os.system(f'neper -T -n {args.num_grains} -periodic 1 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
+        -o data/neper/graph/domain -format tess,obj')
+
+    os.system(f'neper -T -loadtess data/neper/graph/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')   
+    mesh = obj_to_vtu(domain_name='graph')
+    num = len(mesh.cells_dict['polyhedron'])
+    mesh.cell_data['color'] = [onp.hstack((onp.random.uniform(low=0., high=1., size=(num, 3)), onp.ones((num, 1))))]
+    mesh.cell_data['id'] = [onp.arange(num)]
+    mesh.write(f'data/vtk/graph/demo.vtu')
+
+    # poly, _ = polycrystal_gn(domain_name='graph')
+    # print(poly.edges)
+
 
 def make_video():
     # The command -pix_fmt yuv420p is to ensure preview of video on Mac OS is enabled
@@ -158,15 +209,15 @@ def fd_helper(num_fd_nodes):
 
 
 def compute_stats():
-    edges = onp.load(f"data/numpy/fd/info/edges.npy")
-    volumes = onp.load(f"data/numpy/fd/info/vols.npy")
-    centroids = onp.load(f"data/numpy/fd/info/centroids.npy")
-    cell_grain_inds = onp.load(f"data/numpy/fd/info/cell_grain_inds.npy")
+    edges = onp.load(f"data/numpy/fd_single_layer/info/edges.npy")
+    volumes = onp.load(f"data/numpy/fd_single_layer/info/vols.npy")
+    centroids = onp.load(f"data/numpy/fd_single_layer/info/centroids.npy")
+    cell_grain_inds = onp.load(f"data/numpy/fd_single_layer/info/cell_grain_inds.npy")
     num_fd_nodes = len(volumes)
     avg_cell_vol, avg_cell_len = fd_helper(num_fd_nodes)
 
     def compute_stats_helper():
-        if case == 'fd':
+        if case == 'fd_single_layer':
             cell_ori_inds =onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
             melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")        
             T = onp.load(f"data/numpy/{case}/sols/T_{step:03d}.npy")   
@@ -278,7 +329,7 @@ def compute_stats():
  
     # cases = ['gn', 'fd']
     # steps = [20]
-    cases = ['gn', 'fd']
+    cases = ['gn_single_layer', 'fd_single_layer']
     steps = [i for i in range(31)]
     for case in cases:
         T_collect = []
@@ -302,13 +353,13 @@ def produce_figures():
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
     ts = ts[::args.write_sol_interval]*1e6
 
-    volumes = onp.load(f"data/numpy/fd/info/vols.npy")
+    volumes = onp.load(f"data/numpy/fd_single_layer/info/vols.npy")
     num_fd_nodes = len(volumes)
     avg_cell_vol, avg_cell_len = fd_helper(num_fd_nodes)
 
     def T_plot():
-        T_results_fd = onp.load(f"data/numpy/fd/post-processing/T_collect.npy")
-        T_results_gn = onp.load(f"data/numpy/gn/post-processing/T_collect.npy")
+        T_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/T_collect.npy")
+        T_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/T_collect.npy")
 
         step = 12
         T_select_fd = T_results_fd[step]
@@ -336,8 +387,8 @@ def produce_figures():
 
 
     def zeta_plot():
-        zeta_results_fd = onp.load(f"data/numpy/fd/post-processing/zeta_collect.npy")
-        zeta_results_gn = onp.load(f"data/numpy/gn/post-processing/zeta_collect.npy")
+        zeta_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/zeta_collect.npy")
+        zeta_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/zeta_collect.npy")
         labels = ['Melt pool length [mm]', 'Melt pool width [mm]', 'Melt pool height [mm]', 'Melt pool volume [mm$^3$]']
         names = ['melt_pool_length', 'melt_pool_width', 'melt_pool_height', 'melt_pool_volume']
         for i in range(4):
@@ -352,8 +403,8 @@ def produce_figures():
 
 
     def eta_plot():
-        eta_results_fd = onp.load(f"data/numpy/fd/post-processing/eta_collect.npy", allow_pickle=True)
-        eta_results_gn = onp.load(f"data/numpy/gn/post-processing/eta_collect.npy", allow_pickle=True)
+        eta_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/eta_collect.npy", allow_pickle=True)
+        eta_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/eta_collect.npy", allow_pickle=True)
 
         # 1e-7 is used before we consider anisotropy
         val = 1.6*1e-7
@@ -439,12 +490,14 @@ def produce_figures():
 
 
 if __name__ == "__main__":
+    # generate_demo_graph()
     # vtk_convert_from_server()
-    get_unique_ori_colors()
+    # args.case = 'fd_solidification'
+    # get_unique_ori_colors()
     # ipf_logo()
-    # make_video()
+    make_video()
     # compute_stats()
     # produce_figures()
     # post_results()
-    plt.show()
+    # plt.show()
  

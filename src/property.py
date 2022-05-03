@@ -1,3 +1,7 @@
+'''
+We tried to use Neper sister software FEPX (https://fepx.info/).
+To be continued...
+'''
 import numpy as onp
 import jraph
 import jax.numpy as np
@@ -18,8 +22,8 @@ def selected_cube():
         select_width = 0.1
         select_height = 0.025
 
-        os.system(f'neper -T -n 1 -reg 0 -domain "cube({select_length},{select_width},{select_height})" -o data/neper/inspect/simple -format tess')
-        os.system(f'neper -M data/neper/inspect/simple.tess -rcl 0.2 -order 2 -part 4')
+        os.system(f'neper -T -n 1 -reg 0 -domain "cube({select_length},{select_width},{select_height})" -o data/neper/property/simple -format tess')
+        os.system(f'neper -M data/neper/property/simple.tess -rcl 0.2 -order 2 -part 4')
 
     filepath_raw = f'data/neper/domain.msh'
 
@@ -47,7 +51,7 @@ def selected_cube():
 
     assert Nx*Ny*Nz == len(cells)
 
-    filepath_neper = f'data/neper/inspect/simple.msh'
+    filepath_neper = f'data/neper/property/simple.msh'
     mesh = meshio.read(filepath_neper)
     points = mesh.points
     cells =  mesh.cells_dict['tetra10']
@@ -89,7 +93,7 @@ def selected_cube():
             new_lines.append(new_line)
 
         ori_quat = onp.load(f"data/numpy/quat.npy")
-        file_to_write = f'data/neper/inspect/simulation_{case}_{step:03d}.msh'
+        file_to_write = f'data/neper/property/simulation_{case}_{step:03d}.msh'
         with open(file_to_write, 'w') as f:
             for i, line in enumerate(new_lines): 
                 l = line.split()
@@ -106,7 +110,7 @@ def selected_cube():
             f.write(f"$EndElsetOrientations\n")
 
         mesh = meshio.read(file_to_write)
-        mesh.write(f"data/neper/inspect/simulation_{case}_{step:03d}.vtu")
+        mesh.write(f"data/neper/property/simulation_{case}_{step:03d}.vtu")
 
     helper('gn', 20)
     helper('fd', 20)

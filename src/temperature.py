@@ -1,3 +1,6 @@
+'''
+Just for debugging purposes, we wrote this quick FEniCS-based FEM solver to solve temperature field.
+'''
 import fenics as fe
 import numpy as np
 from src.arguments import args
