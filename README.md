@@ -1,28 +1,41 @@
 # Phase-field simulation of microstructure evolution in additive manufacturing
 
-This is the repository for our project on microstructure evolution using phase-field method. We use JAX for implementation.
-More demos and documentation coming soon!
+This is the repository for our project on microstructure evolution using the phase-field method. We implemented both classic direct numerical simulation (DNS) based on the finite difference method and a new physics-embedded graph network (PEGN) approach. The code runs on both CPU and GPU. More demos and documentation coming soon! 
+
+## Requirements 
+
+We use [JAX](https://github.com/google/jax) for implementation of the computationally intensive part. The graph construction is based on [Jraph](https://github.com/deepmind/jraph). The polycrystal structure is generated with [Neper](https://neper.info/). 
+
+## Descriptions
+
+We describe the typical workflow of using the code.
+
+```
+python -m src.single_track
+```
 
 
 
-Grain growth during the directional solidification process
-
-https://user-images.githubusercontent.com/45647025/166503481-95d71fff-ba20-4ca9-8301-9f3e202c3ca5.mp4
-
-Temperature evolution
-
-https://user-images.githubusercontent.com/45647025/166503464-fd01000d-fc75-409c-b575-5d401c9a51dd.mp4
-
-
-Grain structure evolution
-
-https://user-images.githubusercontent.com/45647025/166503458-79f6db02-3bf1-4ba2-b6e8-d48aae104ee8.mp4
-
-
-
-![sample](materials/sample.gif)
 
 <p align="middle">
-  <img src="materials/sample.gif" width="400" />
-  <img src="materials/sample.gif" width="400" /> 
+  <img src="materials/single_track_T_DNS.gif" width="400" />
+  <img src="materials/single_track_T_PEGN.gif" width="400" /> 
 </p>
+
+<p align="middle">
+  <img src="materials/single_track_zeta_DNS.gif" width="400" />
+  <img src="materials/single_track_zeta_PEGN.gif" width="400" /> 
+</p>
+
+<p align="middle">
+  <img src="materials/single_track_eta_DNS.gif" width="400" />
+  <img src="materials/single_track_eta_PEGN.gif" width="400" /> 
+</p>
+
+
+<p align="middle">
+  <img src="materials/solidification_isotropic.gif" width="400" />
+  <img src="materials/solidification_anisotropic.gif" width="400" /> 
+</p>
+
+
