@@ -138,7 +138,7 @@ def make_video():
     # The command -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" is to solve the following "not-divisible-by-2" problem
     # https://stackoverflow.com/questions/20847674/ffmpeg-libx264-height-not-divisible-by-2
     # -y means always overwrite
-    os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" data/mp4/test.mp4')
+    os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2" data/mp4/test.mp4')
 
 
 def obj_to_vtu(domain_name='domain'):

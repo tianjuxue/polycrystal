@@ -18,3 +18,7 @@ Grain structure evolution
 
 https://user-images.githubusercontent.com/45647025/166503458-79f6db02-3bf1-4ba2-b6e8-d48aae104ee8.mp4
 
+
+
+![sample](materials/sample.gif)
+
