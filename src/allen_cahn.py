@@ -14,7 +14,6 @@ from matplotlib import pyplot as plt
 from src.arguments import args
 from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime, read_path
 
-gpus = jax.devices('gpu') 
 
 # TODO: unique_oris_rgb and unique_grain_directions should be a class property, not an instance property
 PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris_rgb', 
@@ -37,9 +36,7 @@ def rk4(state, t_crt, f, *ode_params):
     return (y_crt, t_crt), y_crt
 
 
-# Specify which gpu to use - sometimes the resource is limited.
-# Let's just use the last GPU because most people don't specify anything so they will just use GPU number one.
-@partial(jax.jit, static_argnums=(2,), device=gpus[-1])
+@partial(jax.jit, static_argnums=(2,))
 def explicit_euler(state, t_crt, f, *ode_params):
     '''
     Explict Euler method
@@ -280,7 +277,7 @@ def polycrystal_fd(domain_name='single_layer'):
     '''
     Prepare graph information for finite difference method
     '''
-    filepath=f'data/neper/{domain_name}/domain.msh'
+    filepath = f'data/neper/{domain_name}/domain.msh'
     mesh = meshio.read(filepath)
     points = mesh.points
     cells =  mesh.cells_dict['hexahedron']

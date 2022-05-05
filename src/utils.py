@@ -78,7 +78,7 @@ def get_unique_ori_colors():
         new_params = {
             "figure.facecolor": "w",
             "figure.figsize": (6, 3),
-            "lines.markersize": 6,
+            "lines.markersize": 10,
             "font.size": 20,
             "axes.grid": True,
         }
@@ -141,7 +141,7 @@ def make_video():
     os.system('ffmpeg -y -framerate 10 -i data/png/tmp/u.%04d.png -pix_fmt yuv420p -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2" data/mp4/test.mp4')
 
 
-def obj_to_vtu(domain_name='domain'):
+def obj_to_vtu(domain_name):
     filepath=f'data/neper/{domain_name}/domain.obj'
     file = open(filepath, 'r')
     lines = file.readlines()
@@ -492,12 +492,12 @@ def produce_figures():
 if __name__ == "__main__":
     # generate_demo_graph()
     # vtk_convert_from_server()
-    # args.case = 'fd_solidification'
-    # get_unique_ori_colors()
+    args.case = 'fd_solidification'
+    get_unique_ori_colors()
     # ipf_logo()
-    make_video()
+    # make_video()
     # compute_stats()
     # produce_figures()
     # post_results()
-    # plt.show()
+    plt.show()
  

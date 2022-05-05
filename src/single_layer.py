@@ -1,18 +1,18 @@
 import jax
 import jax.numpy as np
 import numpy as onp
-from src.utils import read_path
+import os
+from src.utils import read_path, obj_to_vtu
 from src.arguments import args
 from src.allen_cahn import polycrystal_gn, polycrystal_fd, build_graph, phase_field, odeint, explicit_euler
 
 
 def neper_domain():
-    # os.system(f'neper -T -n {args.num_grains} -id 1 -domain "cube(1,1,0.3)" -ori "file(data/neper/input.ori)" -o data/neper/domain -format tess,ori')
     os.system(f'neper -T -n {args.num_grains} -id 1 -regularization 0 -domain "cube({args.domain_length},{args.domain_width},{args.domain_height})" \
                 -o data/neper/single_layer/domain -format tess,obj,ori')
     os.system(f'neper -T -loadtess data/neper/single_layer/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
     os.system(f'neper -M -rcl 1 -elttype hex -faset faces data/neper/single_layer/domain.tess')
- 
+
 
 def default_initialization(poly_sim):
     num_nodes = len(poly_sim.centroids)
