@@ -492,12 +492,11 @@ def produce_figures():
 if __name__ == "__main__":
     # generate_demo_graph()
     # vtk_convert_from_server()
-    args.case = 'fd_solidification'
-    get_unique_ori_colors()
+    # get_unique_ori_colors()
     # ipf_logo()
     # make_video()
-    # compute_stats()
-    # produce_figures()
+    compute_stats()
+    produce_figures()
     # post_results()
     plt.show()
  

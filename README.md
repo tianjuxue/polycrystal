@@ -41,6 +41,7 @@ The left column shows results of DNS, while the right column shows results of PE
   <img src="materials/single_track_eta_DNS.gif" width="400" />
   <img src="materials/single_track_eta_PEGN.gif" width="400" /> 
 </p>
+
 __Multi-layer multi-track powder bed fusion process__
 
 Below is the result of using PEGN for simulating a 20-layer process.
@@ -49,6 +50,7 @@ Below is the result of using PEGN for simulating a 20-layer process.
   <img src="materials/NU_1.png" width="300" />
   <img src="materials/NU_2.png" width="300" />
 </p>
+
 __Directional solidification__
 
 Competitive grain growth is observed if grain anisotropy is considered. Left is when grain anisotropy is NOT included, and right is when it is included. Competitiveness: red > blue > green for anisotropic case. The result is based-on DNS.

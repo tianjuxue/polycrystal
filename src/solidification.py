@@ -75,5 +75,7 @@ def run():
 
 
 if __name__ == "__main__":
+    set_params()
+    # get_unique_ori_colors()
     # neper_domain()
     run()

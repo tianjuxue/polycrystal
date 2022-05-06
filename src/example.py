@@ -17,8 +17,9 @@ def set_params():
     args.domain_length = 1.
     args.domain_width = 0.2
     args.domain_height = 0.1
-    args.r_beam = 0.05
+    args.r_beam = 0.03
     args.power = 100
+    args.write_sol_interval = 1000
 
 
 def neper_domain():
@@ -66,7 +67,7 @@ def run():
     '''
     The laser scanning path is defined using a txt file.
     Each line of the txt file stands for:
-    time x_position y_position turn_laser_on_or_off_action
+    time [s], x_position [mm], y_position [mm], action_of_turning_laser_on_or_off_at_this_time [N/A]
     '''
     set_params()
     ts, xs, ys, ps = read_path(f'data/txt/{args.case}.txt')

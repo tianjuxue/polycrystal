@@ -410,7 +410,6 @@ def update_graph():
         # phi = 0.5 * (1 - np.tanh(1e2*(T/args.T_melt - 1)))
         phi = 0.5 * (1 - np.tanh(1e10*(T/args.T_melt - 1)))
 
-
         phase_energy = args.m_p * np.sum(((1 - zeta)**2 * phi + zeta**2 * (1 - phi)))
         gamma = 1
         vmap_outer = jax.vmap(np.outer, in_axes=(0, 0))
@@ -543,10 +542,22 @@ def phase_field(graph, polycrystal):
 
         der_grad = grad_energy_der_fn(y, t, *ode_params)
         der_local = local_energy_der_fn(y, t, *ode_params)
-        L = args.L0 * np.exp(-args.Qg / (T*args.gas_const))
-        rhs_phase_field = -L * (der_grad[:, 1:]/volumes + der_local[:, 1:])
+
+        # How to choose Lp? Seems to be an open question.
+        Lp = args.L0 * np.exp(-args.Qg / (args.T_melt*args.gas_const))
+
+        # The problem of the following definition of Lp is that
+        # if a state is liquid, and assume T is very low, then Lp can be very small, 
+        # then the liquid state can't be transformed to solid state.
+        # Lp = args.L0 * np.exp(-args.Qg / (T*args.gas_const))
+
+        Lg = args.L0 * np.exp(-args.Qg / (T*args.gas_const))
+
+        rhs_p = -Lp * (der_grad[:, 1:2]/volumes + der_local[:, 1:2])
+        rhs_g = -Lg * (der_grad[:, 2:]/volumes + der_local[:, 2:])
         rhs_T = (-der_grad[:, 0:1] + q)/volumes/(args.rho * args.c_p)
-        rhs = np.hstack((rhs_T, rhs_phase_field))
+
+        rhs = np.hstack((rhs_T, rhs_p, rhs_g))
 
         return rhs
 
