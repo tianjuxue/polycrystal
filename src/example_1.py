@@ -3,7 +3,7 @@ import jax.numpy as np
 import numpy as onp
 import os
 import meshio
-from src.utils import read_path, obj_to_vtu
+from src.utils import read_path, obj_to_vtu, unpack_state, walltime
 from src.arguments import args
 from src.allen_cahn import polycrystal_fd, build_graph, phase_field, odeint, explicit_euler
 
@@ -17,15 +17,11 @@ def set_params():
     args.domain_length = 1.
     args.domain_width = 0.2
     args.domain_height = 0.1
-    
     args.r_beam = 0.03
-    args.power = 80
-
-    # args.r_beam = 0.02
-    # args.power = 50
-
+    args.power = 100
     args.write_sol_interval = 1000
-    # args.m_g = 1.2e-4
+    
+    args.ad_hoc = 0.1
 
 
 def neper_domain():
@@ -39,7 +35,7 @@ def neper_domain():
                 -o data/neper/{args.case}/domain -format tess,obj,ori')
     os.system(f'neper -T -loadtess data/neper/{args.case}/domain.tess -statcell x,y,z,vol,facelist -statface x,y,z,area')
     os.system(f'neper -M -rcl 1 -elttype hex -faset faces data/neper/{args.case}/domain.tess')
- 
+
 
 def write_vtu_files():
     '''
@@ -52,6 +48,39 @@ def write_vtu_files():
     fd_mesh.write(f'data/vtk/{args.case}/mesh/fd_mesh.vtu')
     poly_mesh = obj_to_vtu(args.case)
     poly_mesh.write(f'data/vtk/{args.case}/mesh/poly_mesh.vtu')
+
+
+def get_T(centroids, t):
+    '''
+    Analytic T from https://doi.org/10.1016/j.actamat.2021.116862
+    '''
+    T_ambiant = 300.
+    alpha = 5.2
+    Q = 25
+    kappa = 2.7*1e-2
+    x0 = 0.2*args.domain_length
+
+    vel = 0.6/0.0024
+
+    X = centroids[:, 0] - x0 - vel * t
+    Y = centroids[:, 1] - 0.5*args.domain_width
+    Z = centroids[:, 2] - args.domain_height
+    R = np.sqrt(X**2 + Y**2 + Z**2)
+    T = T_ambiant + Q / (2 * np.pi * kappa) / R * np.exp(-vel / (2*alpha) * (R + X))
+
+    return T[:, None]
+
+
+
+@jax.jit
+def overwrite_T(y, centroids, t):
+    '''
+    We overwrite T if T is prescribed.
+    '''
+    T, zeta, eta = unpack_state(y) 
+    T = get_T(centroids, t)
+    return np.hstack((T, zeta, eta))
+
 
 
 def initialization(poly_sim):
@@ -76,15 +105,16 @@ def run():
     time [s], x_position [mm], y_position [mm], action_of_turning_laser_on_or_off_at_this_time [N/A]
     '''
     set_params()
-    ts, xs, ys, ps = read_path(f'data/txt/{args.case}.txt')
+    ts, xs, ys, ps = read_path(f'data/txt/fd_example_1.txt')
     polycrystal, mesh = polycrystal_fd(args.case)
     y0, melt = initialization(polycrystal)
     graph = build_graph(polycrystal, y0)
     state_rhs = phase_field(graph, polycrystal)
-    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
+    odeint(polycrystal, mesh, None, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps, overwrite_T)
 
 
 if __name__ == "__main__":
     # neper_domain()
     # write_vtu_files()
     run()
+

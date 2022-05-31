@@ -1,3 +1,7 @@
+'''
+The file produces figures in the manuscript.
+It also has some post-processing functions.
+'''
 import jax.numpy as np
 import jax
 import numpy as onp
@@ -14,6 +18,15 @@ from orix.vector import Vector3d
 from src.arguments import args
 from sklearn.decomposition import PCA
 from scipy.spatial.transform import Rotation as R
+from src.fit_ellipsoid import EllipsoidTool
+
+
+# # Latex style plot
+# plt.rcParams.update({
+#     "text.latex.preamble": r"\usepackage{amsmath}",
+#     "text.usetex": True,
+#     "font.family": "sans-serif",
+#     "font.sans-serif": ["Helvetica"]})
 
 
 def unpack_state(state):
@@ -163,9 +176,9 @@ def obj_to_vtu(domain_name):
 
 
 def walltime(func):
-    def wrapper(*list_args, **keyword_wargs):
+    def wrapper(*list_args, **keyword_args):
         start_time = time.time()
-        func(*list_args, **keyword_wargs)
+        func(*list_args, **keyword_args)
         end_time = time.time()
         time_elapsed = end_time - start_time
         platform = jax.lib.xla_bridge.get_backend().platform
@@ -208,7 +221,159 @@ def fd_helper(num_fd_nodes):
     return avg_cell_vol, avg_cell_len
 
 
-def compute_stats():
+
+def BFS(edges, melt, cell_ori_inds):
+    num_graph_nodes = len(melt)
+    edges_in_order = [[] for _ in range(num_graph_nodes)]
+
+    print(f"Re-ordering edges...")
+    for edge in edges:
+        node1 = edge[0]
+        node2 = edge[1]
+        edges_in_order[node1].append(node2)
+        edges_in_order[node2].append(node1)
+
+    print(f"BFS...")
+    visited = onp.zeros(num_graph_nodes)
+    grains = [[] for _ in range(args.num_oris)]
+    for i in range(len(visited)):
+        if visited[i] == 0 and melt[i]:
+            oris_index = cell_ori_inds[i]
+            grains[oris_index].append([])
+            queue = [i]
+            visited[i] = 1
+            while queue:
+                s = queue.pop(0) 
+                grains[oris_index][-1].append(s)
+                connected_nodes = edges_in_order[s]
+                for cn in connected_nodes:
+                    if visited[cn] == 0 and cell_ori_inds[cn] == oris_index and melt[cn]:
+                        queue.append(cn)
+                        visited[cn] = 1
+
+    grains_combined = []
+    for i in range(len(grains)):
+        grains_oris = grains[i] 
+        for j in range(len(grains_oris)):
+            grains_combined.append(grains_oris[j])
+
+    return grains_combined
+
+
+def get_aspect_ratio_inputs_single_track(grains_combined, volumes, centroids):
+    grain_vols = []
+    grain_centroids = []
+    for i in range(len(grains_combined)):
+        grain = grains_combined[i]
+        grain_vol = onp.array([volumes[g] for g in grain])
+        grain_centroid = onp.take(centroids, grain, axis=0)
+        assert grain_centroid.shape == (len(grain_vol), 3)
+        grain_vols.append(grain_vol)
+        grain_centroids.append(grain_centroid)
+
+    return grain_vols, grain_centroids
+
+
+def compute_aspect_ratios_and_vols(grain_vols, grain_centroids):
+    pca = PCA(n_components=3)
+    print(f"Call compute_aspect_ratios_and_vols")
+    grain_sum_vols = []
+    grain_sum_aspect_ratios = []
+
+    for i in range(len(grain_vols)):
+        grain_vol = grain_vols[i]
+        sum_vol = onp.sum(grain_vol)
+     
+        if len(grain_vol) < 3:
+            grain_sum_aspect_ratios.append(1.)
+        else:
+            directions = grain_centroids[i]
+            weighted_directions = directions * grain_vol[:, None]
+            # weighted_directions = weighted_directions - onp.mean(weighted_directions, axis=0)[None, :]
+            pca.fit(weighted_directions)
+            components = pca.components_
+            ev = pca.explained_variance_
+            lengths = onp.sqrt(ev)
+            aspect_ratio = 2*lengths[0]/(lengths[1] + lengths[2])
+            grain_sum_aspect_ratios.append(aspect_ratio)
+
+        grain_sum_vols.append(sum_vol)
+  
+    return [grain_sum_vols, grain_sum_aspect_ratios]
+
+
+def compute_stats_multi_layer():
+    args.case = 'gn_multi_layer_scan_1'
+    args.num_total_layers = 10
+
+    grain_oris_inds = []
+    melt = []
+    for i in range(args.num_total_layers):
+        grain_ori_inds_bottom = onp.load(f"data/numpy/{args.case}/sols/layer_{i + 1:03d}/cell_ori_inds_bottom.npy")
+        melt_final_bottom = onp.load(f'data/numpy/{args.case}/sols/layer_{i + 1:03d}/melt_final_bottom.npy')
+        assert grain_ori_inds_bottom.shape == melt_final_bottom.shape
+        grain_oris_inds.append(grain_ori_inds_bottom)
+        melt.append(melt_final_bottom)
+
+    melt = onp.hstack(melt)
+    grain_oris_inds = onp.hstack(grain_oris_inds)
+
+    edges = onp.load(f"data/numpy/{args.case}/info/edges.npy")
+    volumes = onp.load(f"data/numpy/{args.case}/info/vols.npy")
+    centroids = onp.load(f"data/numpy/{args.case}/info/centroids.npy")
+
+    assert melt.shape == volumes.shape
+
+    grains_combined = BFS(edges, melt, grain_oris_inds)
+
+    grain_sum_vols = []
+    for i in range(len(grains_combined)):
+        grain = grains_combined[i]
+        grain_vol = onp.sum(onp.array([volumes[g] for g in grain]))
+        grain_sum_vols.append(grain_vol)
+
+    grain_sum_vols = onp.array(grain_sum_vols)
+
+    val = 0.
+    inds = onp.argwhere(grain_sum_vols > val)[:, 0]
+    grain_sum_vols = grain_sum_vols[inds]*1e9
+    # grain_sum_aspect_ratios = grain_sum_aspect_ratios[inds]
+
+    onp.save(f"data/numpy/{args.case}/post-processing/grain_sum_vols.npy", grain_sum_vols)
+
+    return grain_sum_vols
+
+
+def produce_figures_multi_layer():
+    grain_sum_vols_scan1 = onp.load(f"data/numpy/gn_multi_layer_scan_1/post-processing/grain_sum_vols.npy")
+    grain_sum_vols_scan2 = onp.load(f"data/numpy/gn_multi_layer_scan_2/post-processing/grain_sum_vols.npy")
+
+    colors = ['blue', 'red']
+    labels = ['Scan 1', 'Scan 2']
+
+    print(f"total vol of scan 1 = {onp.sum(grain_sum_vols_scan1)}, mean = {onp.mean(grain_sum_vols_scan1)}")
+    print(f"total vol of scan 2 = {onp.sum(grain_sum_vols_scan2)}, mean = {onp.mean(grain_sum_vols_scan2)}")
+    print(f"total number of grains for scan 1 {len(grain_sum_vols_scan1)}")
+    print(f"total number of grains for scan 2 {len(grain_sum_vols_scan2)}")
+
+    log_grain_sum_vols_scan1 = onp.log10(grain_sum_vols_scan1)
+    log_grain_sum_vols_scan2 = onp.log10(grain_sum_vols_scan2)
+
+    bins = onp.linspace(1e2, 1e7, 25)
+    logbins = np.logspace(np.log10(bins[0]),np.log10(bins[-1]),len(bins))
+
+    fig = plt.figure(figsize=(8, 6))
+    plt.hist([grain_sum_vols_scan1, grain_sum_vols_scan2], bins=logbins, color=colors, label=labels)
+ 
+    plt.xscale('log')
+    plt.xlabel(r'Grain volume [$\mu$m$^3$]', fontsize=20)
+    plt.ylabel(r'Count', fontsize=20)
+    plt.tick_params(labelsize=18)
+    plt.legend(fontsize=20, frameon=False) 
+    # plt.savefig(f'data/pdf/multi_layer_vol.pdf', bbox_inches='tight')
+
+
+def compute_stats_single_layer():
     edges = onp.load(f"data/numpy/fd_single_layer/info/edges.npy")
     volumes = onp.load(f"data/numpy/fd_single_layer/info/vols.npy")
     centroids = onp.load(f"data/numpy/fd_single_layer/info/centroids.npy")
@@ -218,7 +383,7 @@ def compute_stats():
 
     def compute_stats_helper():
         if case == 'fd_single_layer':
-            cell_ori_inds =onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
+            cell_ori_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
             melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")        
             T = onp.load(f"data/numpy/{case}/sols/T_{step:03d}.npy")   
             zeta = onp.load(f"data/numpy/{case}/sols/zeta_{step:03d}.npy") 
@@ -269,64 +434,11 @@ def compute_stats():
         return characteristics
 
     def process_eta():
-        edges_in_order = [[] for _ in range(num_fd_nodes)]
+        grains_combined = BFS(edges, melt, cell_ori_inds)
+        grain_vols, grain_centroids = get_aspect_ratio_inputs_single_track(grains_combined, volumes, centroids)
+        eta_results = compute_aspect_ratios_and_vols(grain_vols, grain_centroids)
+        return eta_results
 
-        print(f"Re-ordering edges...")
-        for edge in edges:
-            node1 = edge[0]
-            node2 = edge[1]
-            edges_in_order[node1].append(node2)
-            edges_in_order[node2].append(node1)
-
-        print(f"BFS...")
-        visited = onp.zeros(num_fd_nodes)
-        grains = [[] for _ in range(args.num_oris)]
-        for i in range(len(visited)):
-            if visited[i] == 0 and melt[i]:
-                oris_index = cell_ori_inds[i]
-                grains[oris_index].append([])
-                queue = [i]
-                visited[i] = 1
-                while queue:
-                    s = queue.pop(0) 
-                    grains[oris_index][-1].append(s)
-                    connected_nodes = edges_in_order[s]
-                    for cn in connected_nodes:
-                        if visited[cn] == 0 and cell_ori_inds[cn] == oris_index and melt[cn]:
-                            queue.append(cn)
-                            visited[cn] = 1
-
-        def compute_aspect_ratios(grain):
-            vol = onp.sum(onp.array([volumes[g] for g in grain]))
-            if len(grain) < 3:
-                return 1., vol
-
-            directions = onp.array([centroids[g] for g in grain])
-            weighted_directions = onp.array([volumes[g]*centroids[g] for g in grain])
-            vols = onp.array([volumes[g] for g in grain])
-
-            # weighted_directions = weighted_directions - onp.mean(weighted_directions, axis=0)[None, :]
-            pca.fit(weighted_directions)
-            components = pca.components_
-            ev = pca.explained_variance_
-            lengths = onp.sqrt(ev)
-            aspect_ratio = 2*lengths[0]/(lengths[1] + lengths[2])
-            return aspect_ratio, vol
-
-        pca = PCA(n_components=3)
-        print(f"Compute vols...")
-        grain_vols = []
-        aspect_ratios = []
-        for i in range(len(grains)):
-            grains_oris = grains[i] 
-            for j in range(len(grains_oris)):
-                grain = grains_oris[j]
-                aspect_ratio, vol = compute_aspect_ratios(grain)
-                aspect_ratios.append(aspect_ratio)
-                grain_vols.append(vol)
-
-        return [grain_vols, aspect_ratios]
- 
     # cases = ['gn', 'fd']
     # steps = [20]
     cases = ['gn_single_layer', 'fd_single_layer']
@@ -344,12 +456,13 @@ def compute_stats():
             T_collect.append(T_results)
             zeta_collect.append(zeta_results)
             eta_collect.append(eta_results)
+
         onp.save(f"data/numpy/{case}/post-processing/T_collect.npy", onp.array(T_collect))
         onp.save(f"data/numpy/{case}/post-processing/zeta_collect.npy", onp.array(zeta_collect))
         onp.save(f"data/numpy/{case}/post-processing/eta_collect.npy", onp.array(eta_collect, dtype=object))
 
 
-def produce_figures():
+def produce_figures_single_layer():
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
     ts = ts[::args.write_sol_interval]*1e6
 
@@ -471,16 +584,16 @@ def produce_figures():
         fig = plt.figure(figsize=(8, 6))
         plt.hist([fd_vols, gn_vols], color=colors, bins=onp.linspace(0., 1e4, 6), label=labels)
         plt.legend(fontsize=20, frameon=False) 
-        plt.xlabel(f'Grain volume [mm$^3$]', fontsize=20)
-        plt.ylabel(f'Count', fontsize=20)
+        plt.xlabel(r'Grain volume [$\mu$m$^3$]', fontsize=20)
+        plt.ylabel(r'Count', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.savefig(f'data/pdf/vol_distribution.pdf', bbox_inches='tight')
 
         fig = plt.figure(figsize=(8, 6))
         plt.hist([fd_aspect_ratios, gn_aspect_ratios], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
         plt.legend(fontsize=20, frameon=False) 
-        plt.xlabel(f'Aspect ratio', fontsize=20)
-        plt.ylabel(f'Count', fontsize=20)
+        plt.xlabel(r'Aspect ratio', fontsize=20)
+        plt.ylabel(r'Count', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.savefig(f'data/pdf/aspect_distribution.pdf', bbox_inches='tight')
 
@@ -495,8 +608,8 @@ if __name__ == "__main__":
     # get_unique_ori_colors()
     # ipf_logo()
     # make_video()
-    compute_stats()
-    produce_figures()
-    # post_results()
+    # compute_stats_single_layer()
+    # produce_figures_single_layer()
+    # compute_stats_multi_layer()
+    produce_figures_multi_layer()
     plt.show()
- 

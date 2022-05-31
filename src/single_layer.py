@@ -48,6 +48,6 @@ def run_fd():
 
 if __name__ == "__main__":
     # neper_domain()
-    run_gn()
+    # run_gn()
     run_fd()
 

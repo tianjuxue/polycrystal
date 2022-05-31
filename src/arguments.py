@@ -6,9 +6,6 @@ import sys
 import numpy as onp
 import matplotlib.pyplot as plt
 from jax.config import config
-import torch
-
-torch.manual_seed(0)
 
 # Set numpy printing format
 onp.random.seed(0)
@@ -57,12 +54,3 @@ parser.add_argument('--layer', type=int, help='layer number', default=1)
 parser.add_argument('--write_sol_interval', type=int, help='interval of writing solutions to file', default=500)
 
 args = parser.parse_args()
-
-# Latex style plot
-plt.rcParams.update({
-    "text.latex.preamble": r"\usepackage{amsmath}",
-    "text.usetex": True,
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Helvetica"]})
-
-

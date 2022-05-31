@@ -14,8 +14,7 @@ def set_params():
     args.domain_length = 2.
     args.domain_width = 2.
     args.domain_height = 0.025
-    args.write_sol_interval = 5000
-    args.case = 'gn_multi_layer'    
+    args.write_sol_interval = 10000
 
 
 def neper_domain():
@@ -39,8 +38,9 @@ def default_initialization(poly_sim):
 
 def layered_initialization(poly_top_layer):
     y_top, melt_top = default_initialization(poly_top_layer)
-    y_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/y_final.npy')
-    melt_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/melt_final.npy')
+    # Current lower layer is previous upper layer
+    y_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/y_final_top.npy')
+    melt_down = np.load(f'data/numpy/{args.case}/sols/layer_{args.layer - 1:03d}/melt_final_top.npy')
     return np.vstack((y_down, y_top)), np.hstack((melt_down, melt_top))
 
 
@@ -76,7 +76,7 @@ def merge_mesh(mesh1, mesh2):
     '''
     Merge two meshes
     '''
-    print("Merging two meshes...")
+    print("Merge two meshes...")
     points1 = mesh1.points
     points2 = mesh2.points 
     cells1 = mesh1.cells_dict['polyhedron']
@@ -99,7 +99,7 @@ def merge_poly(poly1, poly2):
     '''
     Merge two polycrystals: poly2 should exactly sits on top of poly1
     '''
-    print("Merging two polycrystal domains...")
+    print("Merge two polycrystal domains...")
 
     poly1_top_z = poly1.meta_info[2] + poly1.meta_info[5] 
     poly2_bottom_z = poly2.meta_info[2]
@@ -146,7 +146,7 @@ def randomize_oris(poly, seed):
 
 
 # @walltime
-def run_helper():
+def run_helper(path):
     print(f"Merge into poly layer")
     poly1, mesh1  = polycrystal_gn('multi_layer')
     N_random = 100
@@ -192,32 +192,85 @@ def run_helper():
     state_rhs = phase_field(graph, poly_sim)
     # This is how you generate NU.txt
     # traveled_time = onp.cumsum(onp.array([0., 0.6, (0.6**2 + 0.3**2)**0.5, 0.6, 0.2, 0.6, 0.3, 0.6, 0.4]))/500.
-    ts, xs, ys, ps = read_path(f'data/txt/NU.txt')
+    ts, xs, ys, ps = read_path(path)
     odeint(poly_sim, mesh_sim,  bottom_mesh, explicit_euler, state_rhs, y0, melt, ts, xs, ys, ps)
 
 
-def run():
+def write_info():
+    args.case = 'gn_multi_layer_scan_2'
     set_params()
-    for i in range(0, 20):
+    print(f"Merge into poly layer")
+    poly1, mesh1  = polycrystal_gn('multi_layer')
+    poly2 = copy.deepcopy(poly1)
+    flip_poly(poly2, poly1.meta_info[2] + poly1.meta_info[5])
+    poly_layer1 = merge_poly(poly1, poly2)
+    args.layer_height = poly_layer1.meta_info[5]
+
+    crt_layers = copy.deepcopy(poly_layer1)
+
+    args.num_total_layers = 10
+    for i in range(1, args.num_total_layers):
+        print(f"Merge layer {i + 1} into current {i} layers")
+        poly_layer_new = copy.deepcopy(poly_layer1)
+        lift_poly(poly_layer_new, args.layer_height * i)
+        crt_layers = merge_poly(crt_layers, poly_layer_new)
+
+    onp.save(f"data/numpy/{args.case}/info/edges.npy", crt_layers.edges)
+    onp.save(f"data/numpy/{args.case}/info/vols.npy", crt_layers.volumes)
+    onp.save(f"data/numpy/{args.case}/info/centroids.npy", crt_layers.centroids)
+
+
+def run_NU():
+    args.case = 'gn_multi_layer_NU'
+    set_params()
+    args.num_total_layers = 20
+    for i in range(num_total_layers):
         print(f"\nLayer {i + 1}...")
         args.layer = i + 1
         onp.random.seed(args.layer)
-        run_helper()
+        run_helper(f'data/txt/{args.case}.txt')
 
 
-# def exp():
-#     set_params()
-#     poly1, mesh1 = polycrystal_gn('part')
-#     poly2 = copy.deepcopy(poly1)
-#     mesh2 = copy.deepcopy(mesh1)
-#     lift_poly(poly2, args.domain_height)
-#     flip_mesh(mesh2, args.domain_height)
-#     mesh_merged = merge_mesh(mesh1, mesh2)
-#     poly_merged = merge_poly(poly1, poly2)
-#     # print(len(poly_merged.volumes))
-#     print(f"write to solutions")
+def run_scans_1():
+    args.case = 'gn_multi_layer_scan_1'
+    set_params()
+    args.num_total_layers = 10
+    for i in range(args.num_total_layers - 1, args.num_total_layers):
+        print(f"\nLayer {i + 1}...")
+        args.layer = i + 1
+        onp.random.seed(args.layer)
+        run_helper(f'data/txt/{args.case}.txt')
+
+
+def rotate(points, angle, center):
+    rot_mat = onp.array([[onp.cos(angle), -onp.sin(angle)], [onp.sin(angle), onp.cos(angle)]])
+    return onp.matmul(rot_mat, (points - center[None, :]).T).T + center[None, :]
+
+
+def run_scans_2():
+    args.case = 'gn_multi_layer_scan_2'
+    set_params()
+    path1 = f'data/txt/{args.case}-1.txt'
+    path2 = f'data/txt/{args.case}-2.txt'
+    path_info = onp.loadtxt(path1)
+    center = onp.array([args.domain_length/2., args.domain_width/2.])
+    rotated_points = rotate(path_info[:, 1:3], onp.pi/2, center)
+    onp.savetxt(path2, onp.hstack((path_info[:, :1], rotated_points, path_info[:, -1:])), fmt='%.5f')
+
+    args.num_total_layers = 10
+    for i in range(args.num_total_layers - 1, args.num_total_layers):
+        print(f"\nLayer {i + 1}...")
+        args.layer = i + 1
+        onp.random.seed(args.layer)
+        if i % 2 == 0:
+            run_helper(path1)
+        else:
+            run_helper(path2)
 
 
 if __name__ == "__main__":
     # neper_domain()
-    run()
+    # write_info()
+    # run_NU()
+    run_scans_1()
+    run_scans_2()

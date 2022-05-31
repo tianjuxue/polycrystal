@@ -53,7 +53,7 @@ Below is the result of using PEGN for simulating a 20-layer process.
 
 __Directional solidification__
 
-Competitive grain growth is observed if grain anisotropy is considered. Left is when grain anisotropy is NOT included, and right is when it is included. Competitiveness: red > blue > green for anisotropic case. The result is based-on DNS.
+Competitive grain growth is observed if grain anisotropy is considered. Left is when grain anisotropy is NOT included, and right is when it is included. Competitiveness: red > blue > green for anisotropic case. The result is based on DNS.
 
 
 <p align="middle">

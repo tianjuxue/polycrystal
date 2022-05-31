@@ -36,6 +36,9 @@ def rk4(state, t_crt, f, *ode_params):
     return (y_crt, t_crt), y_crt
 
 
+# gpus = jax.devices('gpu')
+# @partial(jax.jit, static_argnums=(2,), device=gpus[-1])
+
 @partial(jax.jit, static_argnums=(2,))
 def explicit_euler(state, t_crt, f, *ode_params):
     '''
@@ -64,13 +67,13 @@ def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, y
     '''
     clean_sols()
     state = (y0, ts[0])
-    if args.case == 'fd_solidification':
+    if overwrite_T is not None:
         state = (overwrite_T(y0, polycrystal.centroids, ts[0]), ts[0])
     write_sols(polycrystal, mesh, y0, melt, 0)
     for (i, t_crt) in enumerate(ts[1:]):
         state, y = stepper(state, t_crt, f, xs[i + 1], ys[i + 1], ps[i + 1])
         state = (force_eta_zero_in_liquid(y), t_crt)
-        if args.case == 'fd_solidification':
+        if overwrite_T is not None:
             state = (overwrite_T(y, polycrystal.centroids, t_crt), t_crt)
         melt = np.logical_or(melt, y[:, 1] < 0.5)
         if (i + 1) % 20 == 0:
@@ -108,13 +111,16 @@ def clean_sols():
     '''
     Clean the data folder.
     '''
-    if args.case == 'gn_multi_layer':
+    if args.case.startswith('gn_multi_layer'):
         vtk_folder = f"data/vtk/{args.case}/sols/layer_{args.layer:03d}"
         if not os.path.exists(vtk_folder):
             os.makedirs(vtk_folder)
         numpy_folder = f'data/numpy/{args.case}/sols/layer_{args.layer:03d}'
         if not os.path.exists(numpy_folder):
             os.makedirs(numpy_folder)
+        group_folder = f"data/vtk/{args.case}/sols/group"
+        if not os.path.exists(group_folder):
+            os.makedirs(group_folder)
     else:
         vtk_folder = f"data/vtk/{args.case}/sols"
         numpy_folder = f"data/numpy/{args.case}/sols"
@@ -130,7 +136,7 @@ def write_info(polycrystal):
     '''
     Mostly for post-processing. E.g., compute grain volume, aspect ratios, etc.
     '''
-    if not args.case == 'gn_multilayer':
+    if not args.case.startswith('gn_multi_layer'):
         onp.save(f"data/numpy/{args.case}/info/edges.npy", polycrystal.edges)
         onp.save(f"data/numpy/{args.case}/info/vols.npy", polycrystal.volumes)
         onp.save(f"data/numpy/{args.case}/info/centroids.npy", polycrystal.centroids)
@@ -145,9 +151,16 @@ def write_sols_heper(polycrystal, mesh, y, melt):
     ipf_x = onp.take(polycrystal.unique_oris_rgb[0], cell_ori_inds, axis=0)
     ipf_y = onp.take(polycrystal.unique_oris_rgb[1], cell_ori_inds, axis=0)
     ipf_z = onp.take(polycrystal.unique_oris_rgb[2], cell_ori_inds, axis=0)
-    ipf_x[eta_max < 0.1] = 0.
-    ipf_y[eta_max < 0.1] = 0.
-    ipf_z[eta_max < 0.1] = 0.
+
+    # ipf_x[eta_max < 0.1] = 0.
+    # ipf_y[eta_max < 0.1] = 0.
+    # ipf_z[eta_max < 0.1] = 0.
+
+    # TODO: Is this better?
+    ipf_x[zeta < 0.1] = 0.
+    ipf_y[zeta < 0.1] = 0.
+    ipf_z[zeta < 0.1] = 0.
+
     mesh.cell_data['T'] = [onp.array(T, dtype=onp.float32)]
     mesh.cell_data['zeta'] = [onp.array(zeta, dtype=onp.float32)]
     mesh.cell_data['ipf_x'] = [ipf_x]
@@ -169,8 +182,8 @@ def write_sols(polycrystal, mesh, y, melt, step):
     '''
     print(f"Write sols to file...")
     T, zeta, cell_ori_inds = write_sols_heper(polycrystal, mesh, y, melt)
-    if args.case == 'gn_multilayer':
-        if args.layer < 6:
+    if args.case.startswith('gn_multi_layer'):
+        if args.layer == args.num_total_layers:
             mesh.write(f"data/vtk/{args.case}/sols/layer_{args.layer:03d}/u{step:03d}.vtu")
     else:
         onp.save(f"data/numpy/{args.case}/sols/T_{step:03d}.npy", T)
@@ -181,13 +194,20 @@ def write_sols(polycrystal, mesh, y, melt, step):
  
 
 def write_final_sols(polycrystal, mesh_bottom_layer, y, melt):
-    if args.case == 'gn_multilayer':
-        y_to_save = onp.array(y[args.layer_num_dofs:, :])
-        y_to_save[:, 0] = args.T_ambient
-        y_to_save[:, 1] = 1.
-        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/y_final.npy', y_to_save)
-        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/melt_final.npy', melt[args.layer_num_dofs:])
-        write_sols_heper(polycrystal, mesh_bottom_layer, y[:args.layer_num_dofs, :], melt[:args.layer_num_dofs])
+    if args.case.startswith('gn_multi_layer'):
+        # top layer solutions are saved to be the initial values of next layer
+        y_top = onp.array(y[args.layer_num_dofs:, :])
+        y_top[:, 0] = args.T_ambient
+        y_top[:, 1] = 1.
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/y_final_top.npy', y_top)
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/melt_final_top.npy', melt[args.layer_num_dofs:])
+
+        # bottom layer solutions are saved for analysis
+        melt_bottom = melt[:args.layer_num_dofs]
+        y_bottom = y[:args.layer_num_dofs, :]
+        T_bottom, zeta_bottom, cell_ori_inds_bottom = write_sols_heper(polycrystal, mesh_bottom_layer, y_bottom, melt_bottom)
+        np.save(f'data/numpy/{args.case}/sols/layer_{args.layer:03d}/melt_final_bottom.npy', melt_bottom)
+        np.save(f"data/numpy/{args.case}/sols/layer_{args.layer:03d}/cell_ori_inds_bottom.npy", cell_ori_inds_bottom)
         mesh_bottom_layer.write(f"data/vtk/{args.case}/sols/group/sol_bottom_layer_{args.layer:03d}.vtu")
 
 
