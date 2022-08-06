@@ -10,6 +10,7 @@ import meshio
 import pickle
 import time
 import os
+import glob
 import matplotlib.pyplot as plt
 from orix import plot, sampling
 from orix.crystal_map import Phase
@@ -19,14 +20,14 @@ from src.arguments import args
 from sklearn.decomposition import PCA
 from scipy.spatial.transform import Rotation as R
 from src.fit_ellipsoid import EllipsoidTool
+ 
 
-
-# # Latex style plot
-# plt.rcParams.update({
-#     "text.latex.preamble": r"\usepackage{amsmath}",
-#     "text.usetex": True,
-#     "font.family": "sans-serif",
-#     "font.sans-serif": ["Helvetica"]})
+# Latex style plot
+plt.rcParams.update({
+    "text.latex.preamble": r"\usepackage{amsmath}",
+    "text.usetex": True,
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Helvetica"]})
 
 
 def unpack_state(state):
@@ -77,7 +78,7 @@ def get_unique_ori_colors():
     rgb_z = ipfkey_z.orientation2color(ori2)
     rgb = onp.stack((rgb_x, rgb_y, rgb_z))
 
-    onp.save(f"data/numpy/quat.npy", ori2.data)
+    onp.save(f"data/numpy/quat_{args.num_oris:03d}.npy", ori2.data)
     dx = onp.array([1., 0., 0.])
     dy = onp.array([0., 1., 0.])
     dz = onp.array([0., 0., 1.])
@@ -85,7 +86,7 @@ def get_unique_ori_colors():
     r = R.from_quat(scipy_quat)
     grain_directions = onp.stack((r.apply(dx), r.apply(dy), r.apply(dz)))
 
-    save_ipf = True
+    save_ipf = False
     if save_ipf:
         # Plot IPF for those orientations
         new_params = {
@@ -178,14 +179,14 @@ def obj_to_vtu(domain_name):
 def walltime(func):
     def wrapper(*list_args, **keyword_args):
         start_time = time.time()
-        func(*list_args, **keyword_args)
+        return_values = func(*list_args, **keyword_args)
         end_time = time.time()
         time_elapsed = end_time - start_time
         platform = jax.lib.xla_bridge.get_backend().platform
         print(f"Time elapsed {time_elapsed} on platform {platform}") 
         with open(f'data/txt/walltime_{platform}_{args.case}_{args.layer:03d}.txt', 'w') as f:
             f.write(f'{start_time}, {end_time}, {time_elapsed}\n')
-        return time_elapsed
+        return return_values
     return wrapper
 
 
@@ -221,18 +222,37 @@ def fd_helper(num_fd_nodes):
     return avg_cell_vol, avg_cell_len
 
 
-
-def BFS(edges, melt, cell_ori_inds):
-    num_graph_nodes = len(melt)
+def get_edges_and_face_in_order(edges, face_areas, num_graph_nodes):
     edges_in_order = [[] for _ in range(num_graph_nodes)]
+    face_areas_in_order = [[] for _ in range(num_graph_nodes)]
 
-    print(f"Re-ordering edges...")
-    for edge in edges:
+    assert len(edges) == len(face_areas)
+
+    print(f"Re-ordering edges and face_areas...")
+    for i, edge in enumerate(edges):
         node1 = edge[0]
         node2 = edge[1]
         edges_in_order[node1].append(node2)
-        edges_in_order[node2].append(node1)
+        edges_in_order[node2].append(node1)  
+        face_areas_in_order[node1].append(face_areas[i])
+        face_areas_in_order[node2].append(face_areas[i])
 
+    return edges_in_order, face_areas_in_order
+
+
+def get_edges_in_order(edges, num_graph_nodes):
+    edges_in_order = [[] for _ in range(num_graph_nodes)]
+    print(f"Re-ordering edges...")
+    for i, edge in enumerate(edges):
+        node1 = edge[0]
+        node2 = edge[1]
+        edges_in_order[node1].append(node2)
+        edges_in_order[node2].append(node1)  
+    return edges_in_order
+
+
+def BFS(edges_in_order, melt, cell_ori_inds, combined=True):
+    num_graph_nodes = len(melt)
     print(f"BFS...")
     visited = onp.zeros(num_graph_nodes)
     grains = [[] for _ in range(args.num_oris)]
@@ -257,7 +277,10 @@ def BFS(edges, melt, cell_ori_inds):
         for j in range(len(grains_oris)):
             grains_combined.append(grains_oris[j])
 
-    return grains_combined
+    if combined:
+        return grains_combined
+    else:
+        return grains
 
 
 def get_aspect_ratio_inputs_single_track(grains_combined, volumes, centroids):
@@ -373,16 +396,16 @@ def produce_figures_multi_layer():
     # plt.savefig(f'data/pdf/multi_layer_vol.pdf', bbox_inches='tight')
 
 
-def compute_stats_single_layer():
-    edges = onp.load(f"data/numpy/fd_single_layer/info/edges.npy")
-    volumes = onp.load(f"data/numpy/fd_single_layer/info/vols.npy")
-    centroids = onp.load(f"data/numpy/fd_single_layer/info/centroids.npy")
-    cell_grain_inds = onp.load(f"data/numpy/fd_single_layer/info/cell_grain_inds.npy")
+def compute_stats_single_layer(neper_mesh):
+    edges = onp.load(f"data/numpy/fd_{neper_mesh}/info/edges.npy")
+    volumes = onp.load(f"data/numpy/fd_{neper_mesh}/info/vols.npy")
+    centroids = onp.load(f"data/numpy/fd_{neper_mesh}/info/centroids.npy")
+    cell_grain_inds = onp.load(f"data/numpy/fd_{neper_mesh}/info/cell_grain_inds.npy")
     num_fd_nodes = len(volumes)
     avg_cell_vol, avg_cell_len = fd_helper(num_fd_nodes)
 
     def compute_stats_helper():
-        if case == 'fd_single_layer':
+        if case.startswith('fd'):
             cell_ori_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
             melt = onp.load(f"data/numpy/{case}/sols/melt_{step:03d}.npy")        
             T = onp.load(f"data/numpy/{case}/sols/T_{step:03d}.npy")   
@@ -397,6 +420,9 @@ def compute_stats_single_layer():
             T = onp.take(grain_T, cell_grain_inds, axis=0)
             zeta = onp.take(zeta_T, cell_grain_inds, axis=0)
 
+        # More reasonable: This is NOT what's currently in paper
+        # melt = onp.logical_and(melt, zeta > 0.5)
+
         return T, zeta, melt, cell_ori_inds
 
     def process_T():
@@ -405,10 +431,11 @@ def compute_stats_single_layer():
         avg_length = 8
         sampling_section = sampling_depth*sampling_width*2
 
+        bias = avg_cell_len/2. if neper_mesh == 'npj_review_voronoi_coarse' else 0.
         inds = onp.argwhere((centroids[:, 2] > args.domain_height - sampling_depth*avg_cell_len) & 
                             (centroids[:, 2] < args.domain_height) &
-                            (centroids[:, 1] > args.domain_width/2 - sampling_width*avg_cell_len) & 
-                            (centroids[:, 1] < args.domain_width/2 + sampling_width*avg_cell_len))[:, 0]
+                            (centroids[:, 1] > args.domain_width/2 + bias - sampling_width*avg_cell_len) & 
+                            (centroids[:, 1] < args.domain_width/2 + bias + sampling_width*avg_cell_len))[:, 0]
 
         T_sampled = T[inds].reshape(sampling_section, -1)
         T_sampled_len = T_sampled.shape[1]
@@ -434,20 +461,27 @@ def compute_stats_single_layer():
         return characteristics
 
     def process_eta():
-        grains_combined = BFS(edges, melt, cell_ori_inds)
+        grains_combined = BFS(edges_in_order, melt, cell_ori_inds)
         grain_vols, grain_centroids = get_aspect_ratio_inputs_single_track(grains_combined, volumes, centroids)
         eta_results = compute_aspect_ratios_and_vols(grain_vols, grain_centroids)
         return eta_results
 
+    edges_in_order = get_edges_in_order(edges, len(centroids))
+
+
     # cases = ['gn', 'fd']
     # steps = [20]
-    cases = ['gn_single_layer', 'fd_single_layer']
-    steps = [i for i in range(31)]
+    cases = [f'gn_{neper_mesh}', f'fd_{neper_mesh}']
+
     for case in cases:
+        numpy_folder = f"data/numpy/{case}/post-processing"
+        if not os.path.exists(numpy_folder):
+            os.makedirs(numpy_folder)
+
         T_collect = []
         zeta_collect = []
         eta_collect = []
-        for step in steps:
+        for step in range(31):
             print(f"step = {step}, case = {case}")
             T, zeta, melt, cell_ori_inds = compute_stats_helper()
             T_results = process_T()
@@ -462,17 +496,21 @@ def compute_stats_single_layer():
         onp.save(f"data/numpy/{case}/post-processing/eta_collect.npy", onp.array(eta_collect, dtype=object))
 
 
-def produce_figures_single_layer():
+def produce_figures_single_layer(neper_mesh, additional_info=None):
+    pdf_folder = f"data/pdf/{neper_mesh}"
+    if not os.path.exists(pdf_folder):
+        os.makedirs(pdf_folder)
+
     ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
     ts = ts[::args.write_sol_interval]*1e6
 
-    volumes = onp.load(f"data/numpy/fd_single_layer/info/vols.npy")
+    volumes = onp.load(f"data/numpy/fd_{neper_mesh}/info/vols.npy")
     num_fd_nodes = len(volumes)
     avg_cell_vol, avg_cell_len = fd_helper(num_fd_nodes)
 
     def T_plot():
-        T_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/T_collect.npy")
-        T_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/T_collect.npy")
+        T_results_fd = onp.load(f"data/numpy/fd_{neper_mesh}/post-processing/T_collect.npy")
+        T_results_gn = onp.load(f"data/numpy/gn_{neper_mesh}/post-processing/T_collect.npy")
 
         step = 12
         T_select_fd = T_results_fd[step]
@@ -486,7 +524,7 @@ def produce_figures_single_layer():
         plt.ylabel(r'Temperature [K]', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.legend(fontsize=20, frameon=False)
-        plt.savefig(f'data/pdf/T_scanning_line.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/T_scanning_line.pdf', bbox_inches='tight')
 
         ind_T = T_results_fd.shape[1]//2
         fig = plt.figure(figsize=(8, 6))
@@ -496,12 +534,12 @@ def produce_figures_single_layer():
         plt.ylabel(r'Temperature [K]', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.legend(fontsize=20, frameon=False)
-        plt.savefig(f'data/pdf/T_center.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/T_center.pdf', bbox_inches='tight')
 
 
     def zeta_plot():
-        zeta_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/zeta_collect.npy")
-        zeta_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/zeta_collect.npy")
+        zeta_results_fd = onp.load(f"data/numpy/fd_{neper_mesh}/post-processing/zeta_collect.npy")
+        zeta_results_gn = onp.load(f"data/numpy/gn_{neper_mesh}/post-processing/zeta_collect.npy")
         labels = ['Melt pool length [mm]', 'Melt pool width [mm]', 'Melt pool height [mm]', 'Melt pool volume [mm$^3$]']
         names = ['melt_pool_length', 'melt_pool_width', 'melt_pool_height', 'melt_pool_volume']
         for i in range(4):
@@ -512,16 +550,26 @@ def produce_figures_single_layer():
             plt.ylabel(labels[i], fontsize=20)
             plt.tick_params(labelsize=18)
             plt.legend(fontsize=20, frameon=False)
-            plt.savefig(f'data/pdf/{names[i]}.pdf', bbox_inches='tight')
+            plt.savefig(f'data/pdf/{neper_mesh}/{names[i]}.pdf', bbox_inches='tight')
 
 
-    def eta_plot():
-        eta_results_fd = onp.load(f"data/numpy/fd_single_layer/post-processing/eta_collect.npy", allow_pickle=True)
-        eta_results_gn = onp.load(f"data/numpy/gn_single_layer/post-processing/eta_collect.npy", allow_pickle=True)
+    def eta_plot(neper_mesh):
+        eta_results_fd = onp.load(f"data/numpy/fd_{neper_mesh}/post-processing/eta_collect.npy", allow_pickle=True)
+        eta_results_gn = onp.load(f"data/numpy/gn_{neper_mesh}/post-processing/eta_collect.npy", allow_pickle=True)
 
-        # 1e-7 is used before we consider anisotropy
-        val = 1.6*1e-7
+        # val = 1e-7 is used before we consider anisotropy
+        # val = 1.6*1e-7 is used after we consider anisotropy
+        if neper_mesh == 'npj_review_voronoi_fine':
+            val = 0.8*1e-7
+        elif neper_mesh == 'npj_review_voronoi_coarse':
+            val = 3.2*1e-7
+        else:
+            val = 1.6*1e-7
 
+        if additional_info == 'npj_review_centroidal_big_grain':
+            neper_mesh = additional_info
+            val = 1e-5
+ 
         def eta_helper(eta_results):
             vols_filtered = []
             aspect_ratios_filtered = []
@@ -550,7 +598,7 @@ def produce_figures_single_layer():
         plt.ylabel(r'Number of grains', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.legend(fontsize=20, frameon=False)
-        plt.savefig(f'data/pdf/num_grains.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/num_grains.pdf', bbox_inches='tight')
 
         fig = plt.figure(figsize=(8, 6))
         plt.plot(ts, avg_vol_fd, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
@@ -559,7 +607,7 @@ def produce_figures_single_layer():
         plt.ylabel(r'Average grain volume [$\mu$m$^3$]', fontsize=20)
         plt.tick_params(labelsize=18)
         plt.legend(fontsize=20, frameon=False)
-        plt.savefig(f'data/pdf/grain_vol.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/grain_vol.pdf', bbox_inches='tight')
 
         step = 30
         assert len(aspect_ratios_filtered_fd) == 31
@@ -587,7 +635,7 @@ def produce_figures_single_layer():
         plt.xlabel(r'Grain volume [$\mu$m$^3$]', fontsize=20)
         plt.ylabel(r'Count', fontsize=20)
         plt.tick_params(labelsize=18)
-        plt.savefig(f'data/pdf/vol_distribution.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/vol_distribution.pdf', bbox_inches='tight')
 
         fig = plt.figure(figsize=(8, 6))
         plt.hist([fd_aspect_ratios, gn_aspect_ratios], color=colors, bins=onp.linspace(1, 4, 13), label=labels)
@@ -595,11 +643,245 @@ def produce_figures_single_layer():
         plt.xlabel(r'Aspect ratio', fontsize=20)
         plt.ylabel(r'Count', fontsize=20)
         plt.tick_params(labelsize=18)
-        plt.savefig(f'data/pdf/aspect_distribution.pdf', bbox_inches='tight')
+        plt.savefig(f'data/pdf/{neper_mesh}/aspect_distribution.pdf', bbox_inches='tight')
 
-    # T_plot()
+
+        # print(num_vols_fd)
+        # print(num_vols_gn)
+
+    T_plot()
     # zeta_plot()
-    eta_plot()
+    # eta_plot(neper_mesh)
+
+
+def compute_vol_and_area(grain, volumes, centroids, face_areas_in_order, edges_in_order):
+    vol = onp.sum(onp.take(volumes, grain))
+    cen = onp.mean(onp.take(centroids, grain, axis=0), axis=0)
+    hash_table = set(grain)
+    # print(f"Total number of g = {len(grain)}")
+    area = 0.
+    for g in grain:
+        count = 0
+        for i, f_area in enumerate(face_areas_in_order[g]):
+            if edges_in_order[g][i] not in hash_table:
+                area += f_area
+            else:
+                count += 1
+        # print(f"Found {count} neighbor")
+    # print(f"Total number of neighbors found = {count}")
+    return vol, area, cen
+       
+
+def grain_nodes_and_edges(grain, edges_in_order):
+    hash_table = set(grain)
+    count = 0
+    for g in grain:
+        for e in edges_in_order[g]:
+            if e in hash_table:
+                count += 1
+    return len(grain), count//2
+
+
+def npj_review_grain_growth():
+    neper_mesh = 'npj_review_voronoi'
+
+    cases = ['gn_npj_review_voronoi']
+    # cases = [f'gn_{neper_mesh}', f'fd_{neper_mesh}']
+
+    for case in cases:
+        args.case = case
+        args.num_oris = 20
+        args.num_grains = 40000
+
+        compute = True
+        if compute:
+            files_vtk = glob.glob(f"data/vtk/{args.case}/single_grain/*")
+            for f in files_vtk:
+                os.remove(f)
+            unique_oris_rgb, unique_grain_directions = get_unique_ori_colors()
+            edges = onp.load(f"data/numpy/{args.case}/info/edges.npy")
+            volumes = onp.load(f"data/numpy/{args.case}/info/vols.npy")
+            centroids = onp.load(f"data/numpy/{args.case}/info/centroids.npy")
+            face_areas = onp.load(f"data/numpy/{args.case}/info/face_areas.npy")
+
+            edges_in_order, face_areas_in_order = get_edges_and_face_in_order(edges, face_areas, len(centroids))
+
+            grain_geo = []
+            for step in range(15, 31, 5):
+                print(f"step = {step}, case = {args.case}")
+                oris_inds = onp.load(f"data/numpy/{args.case}/sols/cell_ori_inds_{step:03d}.npy")
+                melt = onp.load(f"data/numpy/{args.case}/sols/melt_{step:03d}.npy")
+                zeta = onp.load(f"data/numpy/{args.case}/sols/zeta_{step:03d}.npy") 
+                melt = onp.logical_and(melt, zeta > 0.5)
+                ipf_z = onp.take(unique_oris_rgb[2], oris_inds, axis=0)
+
+                grains = BFS(edges_in_order, melt, oris_inds, combined=False)
+                grains_combined = BFS(edges_in_order, melt, oris_inds, combined=True)
+
+                # Very ad-hoc
+                if args.case.startswith('gn'):
+                    selected_grain_id = 17980
+                else:
+                    selected_grain_id = 2876108
+
+                # To answer reviewer 1 Q5
+                if step == 30 and args.case.startswith('gn'):
+                    nums_nodes = []
+                    nums_edges = []
+                    for grain in grains_combined:
+                        num_nodes, num_edges = grain_nodes_and_edges(grain, edges_in_order)
+                        nums_nodes.append(num_nodes)
+                        nums_edges.append(num_edges)
+                    nums_nodes = onp.array(nums_nodes)
+                    nums_edges = onp.array(nums_edges)
+                    print(f"len(nums_nodes) = {len(nums_nodes)}")
+                    print(f"max nums_nodes = {onp.max(nums_nodes)}, min nums_nodes = {onp.min(nums_nodes)}")
+                    print(f"mean nums_nodes = {onp.mean(nums_nodes)}, std nums_nodes = {onp.std(nums_nodes)}")
+                    print(f"max nums_edges = {onp.max(nums_edges)}, min nums_edges = {onp.min(nums_edges)}")
+                    print(f"mean nums_edges = {onp.mean(nums_edges)}, std nums_edges = {onp.std(nums_edges)}")
+                    print(f"onp.argmax(nums_nodes) = {onp.argmax(nums_nodes)}")
+                    print(f"onp.argmax(nums_edges) = {onp.argmax(nums_edges)}")
+
+
+                grains_same_ori = []
+                idx = 11
+                # 11: pink color
+                for i, g in enumerate(grains[idx]):
+                    vol, area, cen = compute_vol_and_area(onp.array(g), volumes, centroids, face_areas_in_order, edges_in_order)
+                    grains_same_ori += g
+                    # print(f"vol = {vol}, area = {area}")
+                    # if cen[0] > args.domain_length/2. and cen[1] < args.domain_width:
+                    #     print(f"cen = {cen}, i = {i}, g = {g}")
+                    if selected_grain_id in g:
+                        single_grain_idx = g
+                        grain_geo.append([vol, area])
+         
+ 
+                def plot_some_grains(grain_ids, name):
+                    if args.case.startswith('gn'):
+                        mesh = obj_to_vtu(neper_mesh)
+                        cells = [('polyhedron', onp.take(mesh.cells_dict['polyhedron'], grain_ids, axis=0))]
+                    else:
+                        mesh = meshio.read(f"data/vtk/{args.case}/sols/u000.vtu")
+                        cells = [('hexahedron', onp.take(mesh.cells_dict['hexahedron'], grain_ids, axis=0))]
+
+                    new_mesh = meshio.Mesh(mesh.points, cells)
+                    new_mesh.cell_data['ipf_z'] = [onp.take(ipf_z, grain_ids, axis=0)] 
+                    new_mesh.write(f'data/vtk/{args.case}/single_grain/{name}_u{step:03d}.vtu') 
+
+                plot_some_grains(grains_same_ori, 'same_color')
+                plot_some_grains(single_grain_idx, 'single_grain')
+
+
+            onp.save(f"data/numpy/{args.case}/post-processing/grain_geo.npy", onp.array(grain_geo))  
+ 
+
+    fd_grain_geo = onp.load(f"data/numpy/fd_{neper_mesh}/post-processing/grain_geo.npy") 
+    gn_grain_geo = onp.load(f"data/numpy/gn_{neper_mesh}/post-processing/grain_geo.npy") 
+
+    ts, xs, ys, ps = read_path(f'data/txt/single_track.txt')
+    ts = ts[::args.write_sol_interval]*1e6
+    ts = ts[15:31:5]
+
+    fig = plt.figure(figsize=(8, 6)) 
+    plt.plot(ts, fd_grain_geo[:, 0]*1e9, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
+    plt.plot(ts, gn_grain_geo[:, 0]*1e9, label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)    
+    plt.xlabel(r'Time [$\mu$s]', fontsize=20)
+    plt.ylabel(r'Grain volume [$\mu$m$^3$]', fontsize=20)
+    plt.tick_params(labelsize=18)
+    plt.legend(fontsize=20, frameon=False)
+    # plt.savefig(f'data/pdf/npj_review_grain_growth/grain_vol.pdf', bbox_inches='tight')            
+
+    fig = plt.figure(figsize=(8, 6)) 
+    plt.plot(ts, fd_grain_geo[:, 1]*1e6, label='DNS', color='blue', marker='o', markersize=8, linestyle="-", linewidth=2)
+    plt.plot(ts, gn_grain_geo[:, 1]*1e6, label='PEGN', color='red', marker='o', markersize=8, linestyle="-", linewidth=2)    
+    plt.xlabel(r'Time [$\mu$s]', fontsize=20)
+    plt.ylabel(r'Surface area [$\mu$m$^2$]', fontsize=20)
+    plt.tick_params(labelsize=18)
+    plt.legend(fontsize=20, frameon=False)
+    # plt.savefig(f'data/pdf/npj_review_grain_growth/grain_area.pdf', bbox_inches='tight')            
+
+
+def single_layer():
+    neper_mesh = 'single_layer'
+    compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+    
+
+def npj_review_voronoi():
+    args.num_oris = 20
+    args.num_grains = 40000
+    neper_mesh = 'npj_review_voronoi'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_voronoi_more_oris():
+    args.num_oris = 40
+    args.num_grains = 40000
+    neper_mesh = 'npj_review_voronoi_more_oris'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_voronoi_less_oris():
+    args.num_oris = 10
+    args.num_grains = 40000
+    neper_mesh = 'npj_review_voronoi_less_oris'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_voronoi_fine():
+    args.num_oris = 20
+    args.num_grains = 80000
+    neper_mesh = 'npj_review_voronoi_fine'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_voronoi_coarse():
+    args.num_oris = 20
+    args.num_grains = 20000
+    neper_mesh = 'npj_review_voronoi_coarse'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_centroidal():
+    args.num_oris = 20
+    args.num_grains = 40000
+    neper_mesh = 'npj_review_centroidal'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_centroidal_big_grain():
+    args.num_oris = 20
+    args.num_grains = 40000
+    neper_mesh = 'npj_review_centroidal'
+    produce_figures_single_layer(neper_mesh, 'npj_review_centroidal_big_grain')
+
+
+def npj_review_laser_150():
+    args.power = 150.
+    neper_mesh = 'npj_review_voronoi_laser_150'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_laser_250():
+    args.power = 250.
+    neper_mesh = 'npj_review_voronoi_laser_250'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
+
+
+def npj_review_laser_100():
+    args.power = 100.
+    neper_mesh = 'npj_review_voronoi_laser_100'
+    # compute_stats_single_layer(neper_mesh)
+    produce_figures_single_layer(neper_mesh)
 
 
 if __name__ == "__main__":
@@ -608,8 +890,17 @@ if __name__ == "__main__":
     # get_unique_ori_colors()
     # ipf_logo()
     # make_video()
-    # compute_stats_single_layer()
-    # produce_figures_single_layer()
     # compute_stats_multi_layer()
-    produce_figures_multi_layer()
-    plt.show()
+    # produce_figures_multi_layer()
+
+    npj_review_voronoi()
+    npj_review_voronoi_more_oris()
+    npj_review_voronoi_less_oris()
+    npj_review_voronoi_fine()
+    npj_review_voronoi_coarse()
+    npj_review_centroidal()
+    # npj_review_centroidal_big_grain()
+    npj_review_laser_100()
+
+    # npj_review_grain_growth()
+    # plt.show()

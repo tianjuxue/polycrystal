@@ -1,3 +1,7 @@
+'''
+For debugging purposes, replicate the curved shape grains as reported in Voorhees's paper
+See https://doi.org/10.1016/j.actamat.2021.116862
+'''
 import jax
 import jax.numpy as np
 import numpy as onp

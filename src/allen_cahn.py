@@ -12,11 +12,11 @@ from scipy.spatial.transform import Rotation as R
 from collections import namedtuple
 from matplotlib import pyplot as plt
 from src.arguments import args
-from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime, read_path
+from src.utils import unpack_state, get_unique_ori_colors, obj_to_vtu, walltime
 
 
 # TODO: unique_oris_rgb and unique_grain_directions should be a class property, not an instance property
-PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'centroids', 'volumes', 'unique_oris_rgb', 
+PolyCrystal = namedtuple('PolyCrystal', ['edges', 'ch_len', 'face_areas', 'centroids', 'volumes', 'unique_oris_rgb', 
     'unique_grain_directions', 'cell_ori_inds', 'boundary_face_areas', 'boundary_face_centroids', 'meta_info'])
 
 
@@ -60,7 +60,28 @@ def force_eta_zero_in_liquid(y):
     return np.hstack((T, zeta, eta))
 
 
-@walltime
+# @walltime
+def odeint_no_output(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, ys, ps, overwrite_T=None):
+    '''
+    Just for measureing wall time.
+    '''
+    before_jit = time.time()
+    state = (y0, ts[0])
+    for (i, t_crt) in enumerate(ts[1:]):
+        state, y = stepper(state, t_crt, f, xs[i + 1], ys[i + 1], ps[i + 1])
+        state = (force_eta_zero_in_liquid(y), t_crt)
+        if (i + 1) % 1000 == 0:
+            print(f"step {i + 1} of {len(ts[1:])}, unix timestamp = {time.time()}")
+        if i == 0:
+            start_time = time.time()
+        
+    end_time = time.time()
+    platform = jax.lib.xla_bridge.get_backend().platform
+    print(f"Time for jitting: {start_time - before_jit}, execution: {end_time - start_time} on platform {platform}") 
+    with open(f'data/txt/walltime_{platform}_{args.case}_{args.layer:03d}.txt', 'w') as f:
+        f.write(f'{start_time - before_jit} {end_time - start_time} {len(polycrystal.centroids)} {len(polycrystal.edges)} {args.num_oris}\n')
+
+
 def odeint(polycrystal, mesh, mesh_bottom_layer, stepper, f, y0, melt, ts, xs, ys, ps, overwrite_T=None):
     '''
     ODE integrator. 
@@ -124,6 +145,10 @@ def clean_sols():
     else:
         vtk_folder = f"data/vtk/{args.case}/sols"
         numpy_folder = f"data/numpy/{args.case}/sols"
+        if not os.path.exists(vtk_folder):
+            os.makedirs(vtk_folder)
+        if not os.path.exists(numpy_folder):
+            os.makedirs(numpy_folder)
 
     files_vtk = glob.glob(vtk_folder + f"/*")
     files_numpy = glob.glob(numpy_folder + f"/*")
@@ -137,7 +162,11 @@ def write_info(polycrystal):
     Mostly for post-processing. E.g., compute grain volume, aspect ratios, etc.
     '''
     if not args.case.startswith('gn_multi_layer'):
+        numpy_folder_info = f"data/numpy/{args.case}/info"
+        if not os.path.exists(numpy_folder_info):
+            os.makedirs(numpy_folder_info)
         onp.save(f"data/numpy/{args.case}/info/edges.npy", polycrystal.edges)
+        onp.save(f"data/numpy/{args.case}/info/face_areas.npy", polycrystal.face_areas)
         onp.save(f"data/numpy/{args.case}/info/vols.npy", polycrystal.volumes)
         onp.save(f"data/numpy/{args.case}/info/centroids.npy", polycrystal.centroids)
 
@@ -168,6 +197,7 @@ def write_sols_heper(polycrystal, mesh, y, melt):
     mesh.cell_data['ipf_z'] = [ipf_z]
     mesh.cell_data['melt'] = [onp.array(melt, dtype=onp.float32)]
     cell_ori_inds = onp.array(cell_ori_inds, dtype=onp.int32)
+    # Remark: cell_ori_inds starts with index 0
     mesh.cell_data['ori_inds'] = [cell_ori_inds]
 
     return T, zeta, cell_ori_inds
@@ -287,7 +317,7 @@ def polycrystal_gn(domain_name='single_layer'):
     # ch_len_avg = (domain_vol / args.num_grains)**(1./3.) * onp.ones(len(new_face_areas))
 
     meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
-    polycrystal = PolyCrystal(new_edges, ch_len, centroids, volumes, unique_oris_rgb, unique_grain_directions,
+    polycrystal = PolyCrystal(new_edges, ch_len, new_face_areas, centroids, volumes, unique_oris_rgb, unique_grain_directions,
                               cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
 
     return polycrystal, mesh
@@ -302,6 +332,11 @@ def polycrystal_fd(domain_name='single_layer'):
     points = mesh.points
     cells =  mesh.cells_dict['hexahedron']
     cell_grain_inds = mesh.cell_data['gmsh:physical'][0] - 1
+
+    numpy_folder = f"data/numpy/{args.case}/info"
+    if not os.path.exists(numpy_folder):
+        os.makedirs(numpy_folder)
+
     onp.save(f"data/numpy/{args.case}/info/cell_grain_inds.npy", cell_grain_inds)
     assert args.num_grains == onp.max(cell_grain_inds) + 1
 
@@ -341,6 +376,7 @@ def polycrystal_fd(domain_name='single_layer'):
     domain_vol = args.domain_length*args.domain_width*args.domain_height
     volumes = domain_vol / (Nx*Ny*Nz) * onp.ones(len(cells))
     ch_len = (domain_vol / len(cells))**(1./3.) * onp.ones(len(edges))
+    face_areas = (domain_vol / len(cells))**(2./3.) * onp.ones(len(edges))
 
     face_inds = [[0, 3, 4, 7], [1, 2, 5, 6], [0, 1, 4, 5], [2, 3, 6, 7], [0, 1, 2, 3], [4, 5, 6, 7]]
     boundary_face_centroids = onp.transpose(onp.stack([onp.mean(onp.take(cell_points, face_ind, axis=1), axis=1) 
@@ -358,7 +394,7 @@ def polycrystal_fd(domain_name='single_layer'):
     boundary_face_areas = onp.transpose(onp.stack(boundary_face_areas))
 
     meta_info = onp.array([0., 0., 0., args.domain_length, args.domain_width, args.domain_height])
-    polycrystal = PolyCrystal(edges, ch_len, centroids, volumes, unique_oris_rgb, unique_grain_directions,
+    polycrystal = PolyCrystal(edges, ch_len, face_areas, centroids, volumes, unique_oris_rgb, unique_grain_directions,
                               cell_ori_inds, boundary_face_areas, boundary_face_centroids, meta_info)
 
     return polycrystal, mesh
@@ -535,7 +571,6 @@ def phase_field(graph, polycrystal):
         assert anisotropy_term.shape == (len(graph.senders), args.num_oris)
         graph.edges['anisotropy'] = anisotropy_term
         print("End of compute_anisotropy...")
- 
 
     def compute_energy(y, t, *ode_params):
         '''

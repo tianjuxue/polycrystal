@@ -1,35 +1,30 @@
 '''
-We tried to use Neper sister software FEPX (https://fepx.info/).
-To be continued...
+We tried to use Neper sister software FEPX (https://fepx.info/) or DAMASK for crystal plasticity anlysis.
 '''
-import numpy as onp
-import jraph
-import jax.numpy as np
-import jax
-import pymesh
-import meshio
-import gmsh
-import os
-import fenics as fe
-import mshr
-import matplotlib.pyplot as plt
 
+def selected_cube_hex():
+    '''
+    This function produces input files for DAMASK (and for the OSU folks).
+    Since we're using MOOSE now instead of DAMASK, this function should be deprecated.
+    See https://github.com/tianjuxue/cp_gnn
+    '''
+    property_name = 'property_damask'
+    
+    offset_x = 0.5
+    offset_y = 0.1
+    offset_z = 0.05
 
-def selected_cube():
     neper_create_cube = True
     if neper_create_cube:
         select_length = 0.2
-        select_width = 0.1
-        select_height = 0.025
+        select_width = 0.2
+        select_height = 0.05
 
-        os.system(f'neper -T -n 1 -reg 0 -domain "cube({select_length},{select_width},{select_height})" -o data/neper/property/simple -format tess')
-        os.system(f'neper -M data/neper/property/simple.tess -rcl 0.2 -order 2 -part 4')
+        os.system(f'neper -T -n 1 -reg 0 -domain "cube({select_length},{select_width},{select_height})" -o data/neper/{property_name}/simple -format tess')
+        os.system(f'neper -M -rcl 0.1 -elttype hex data/neper/{property_name}/simple.tess ')
 
-    filepath_raw = f'data/neper/domain.msh'
 
-    offset_x = 0.3
-    offset_y = 0.05
-    offset_z = 0.075
+    filepath_raw = f'data/neper/single_layer/domain.msh'
 
     mesh = meshio.read(filepath_raw)
     points = mesh.points
@@ -51,25 +46,27 @@ def selected_cube():
 
     assert Nx*Ny*Nz == len(cells)
 
-    filepath_neper = f'data/neper/property/simple.msh'
+    filepath_neper = f'data/neper/{property_name}/simple.msh'
     mesh = meshio.read(filepath_neper)
     points = mesh.points
-    cells =  mesh.cells_dict['tetra10']
+
+    cells =  mesh.cells_dict['hexahedron']
     cell_points = onp.take(points, cells, axis=0)
-    order2_tet_centroids = onp.mean(cell_points, axis=1)
-    indx = onp.round((order2_tet_centroids[:, 0] + offset_x - min_x - tick_x / 2.) / tick_x)
-    indy = onp.round((order2_tet_centroids[:, 1] + offset_y - min_y - tick_y / 2.) / tick_y)
-    indz = onp.round((order2_tet_centroids[:, 2] + offset_z - min_z - tick_z / 2.) / tick_z)
+    order2_hex_centroids = onp.mean(cell_points, axis=1)
+    indx = onp.round((order2_hex_centroids[:, 0] + offset_x - min_x - tick_x / 2.) / tick_x)
+    indy = onp.round((order2_hex_centroids[:, 1] + offset_y - min_y - tick_y / 2.) / tick_y)
+    indz = onp.round((order2_hex_centroids[:, 2] + offset_z - min_z - tick_z / 2.) / tick_z)
     total_ind = onp.array(indx + indy * Nx + indz * Nx * Ny, dtype=np.int32)
 
 
     def helper(case, step):
-        if case == 'fd':
+        print(f"Processing case {case} and step {step}")
+        if case == 'fd_single_layer':
             cell_ori_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
         else:
             grain_oris_inds = onp.load(f"data/numpy/{case}/sols/cell_ori_inds_{step:03d}.npy")
-            cell_grain_inds = onp.load(f"data/numpy/fd/info/cell_grain_inds.npy")
-            cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds - 1, axis=0)
+            cell_grain_inds = onp.load(f"data/numpy/fd_single_layer/info/cell_grain_inds.npy")
+            cell_ori_inds = onp.take(grain_oris_inds, cell_grain_inds, axis=0)
 
         order2_cell_ori_inds = onp.take(cell_ori_inds, total_ind, axis=0)
 
@@ -79,12 +76,13 @@ def selected_cube():
         flag = True
         for i, line in enumerate(lines):
             l = line.split()
-            if len(l) == 16:
+            # TODO: dirty
+            if len(l) == 14:
                 if flag: 
                     offset_cell_ind = int(l[0])
                     flag = False
 
-                ori_ind = order2_cell_ori_inds[int(l[0]) - offset_cell_ind] + 1
+                ori_ind = order2_cell_ori_inds[int(l[0]) - offset_cell_ind]
                 l[3] = str(ori_ind)
                 l[4] = str(ori_ind)
                 new_line = " ".join(l) + "\n"
@@ -93,12 +91,18 @@ def selected_cube():
             new_lines.append(new_line)
 
         ori_quat = onp.load(f"data/numpy/quat.npy")
-        file_to_write = f'data/neper/property/simulation_{case}_{step:03d}.msh'
+        file_to_write = f'data/neper/{property_name}/simulation_{case}_{step:03d}.msh'
         with open(file_to_write, 'w') as f:
             for i, line in enumerate(new_lines): 
                 l = line.split()
                 if l[0] == "$ElsetOrientations":
                     break
+                # TODO: dirty
+                elif len(l) == 4:
+                    l[1] = str(float(l[1]) + offset_x)
+                    l[2] = str(float(l[2]) + offset_y)
+                    l[3] = str(float(l[3]) + offset_z)
+                    f.write(" ".join(l) + "\n")
                 else:
                     f.write(line)
             f.write(f"$ElsetOrientations\n{len(ori_quat)} quaternion:active\n")
@@ -110,15 +114,12 @@ def selected_cube():
             f.write(f"$EndElsetOrientations\n")
 
         mesh = meshio.read(file_to_write)
-        mesh.write(f"data/neper/property/simulation_{case}_{step:03d}.vtu")
+        mesh.write(f"data/neper/{property_name}/simulation_{case}_{step:03d}.vtu")
 
-    helper('gn', 20)
-    helper('fd', 20)
-    helper('fd', 0)
+    helper('gn_single_layer', 30)
+    helper('fd_single_layer', 30)
+    helper('fd_single_layer', 0)
 
 
 if __name__ == "__main__":
-    # hex2tet()
-    selected_cube()
-
-
+    selected_cube_hex()
