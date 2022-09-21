@@ -1,6 +1,6 @@
 # Phase-field simulation of microstructure evolution in additive manufacturing
 
-This is the repository for our project on simulating microstructure evolution in metal additive manufacturing using the phase-field method. We implemented both classic direct numerical simulation (DNS) based on the finite difference method and a new physics-embedded graph network (PEGN) approach. PEGN is a computationally light alternative for DNS. The code runs on both CPU and GPU. The DNS approach generally follows [Yang et al](https://www.nature.com/articles/s41524-021-00524-6). This code is developed under [AMPL](https://www.cao.mech.northwestern.edu/) at Northwestern University. This code is still under development. 
+This is the repository for our paper "[Physics-embedded graph network for accelerating phase-field simulation of microstructure evolution in additive manufacturing](https://doi.org/10.1038/s41524-022-00890-9)" on _npj Computational Materials - Nature_. We implemented both classic direct numerical simulation (DNS) based on the finite difference method and a new physics-embedded graph network (PEGN) approach. PEGN is a computationally light alternative for DNS. The code runs on both CPU and GPU. The DNS approach generally follows [Yang et al](https://www.nature.com/articles/s41524-021-00524-6). This code is developed under [AMPL](https://www.cao.mech.northwestern.edu/) at Northwestern University. 
 
 ## Requirements 
 
@@ -18,7 +18,7 @@ The file  `src/example.py` is an instructive example. To run this file, under ro
 python -m src.example
 ```
 
-Please see the comments in  `src/example.py` for further details.
+Please see the comments in  `src/example.py` for further details. We also have [an instruction file](https://github.com/tianjuxue/polycrystal/blob/main/Instructions.md) for FAQs.
 
 ## Case studies 
 
